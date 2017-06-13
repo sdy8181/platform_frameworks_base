@@ -23,26 +23,27 @@ import android.content.res.Resources;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.Switch;
 
 import com.android.internal.logging.MetricsLogger;
+import com.android.internal.logging.MetricsProto.MetricsEvent;
+import com.android.settingslib.net.DataUsageController;
 import com.android.systemui.R;
+import com.android.systemui.qs.QSIconView;
 import com.android.systemui.qs.QSTile;
-import com.android.systemui.qs.QSTileView;
 import com.android.systemui.qs.SignalTileView;
 import com.android.systemui.statusbar.policy.NetworkController;
 import com.android.systemui.statusbar.policy.NetworkController.IconState;
-import com.android.systemui.statusbar.policy.NetworkController.MobileDataController;
-import com.android.systemui.statusbar.policy.NetworkController.MobileDataController.DataUsageInfo;
 import com.android.systemui.statusbar.policy.NetworkController.SignalCallback;
-import com.android.systemui.statusbar.policy.SignalCallbackAdapter;
 
 /** Quick settings tile: Cellular **/
 public class CellularTile extends QSTile<QSTile.SignalState> {
-    private static final Intent CELLULAR_SETTINGS = new Intent().setComponent(new ComponentName(
+    static final Intent CELLULAR_SETTINGS = new Intent().setComponent(new ComponentName(
             "com.android.settings", "com.android.settings.Settings$DataUsageSummaryActivity"));
 
     private final NetworkController mController;
-    private final MobileDataController mDataController;
+    private final DataUsageController mDataController;
     private final CellularDetailAdapter mDetailAdapter;
 
     private final CellSignalCallback mSignalCallback = new CellSignalCallback();
@@ -55,7 +56,7 @@ public class CellularTile extends QSTile<QSTile.SignalState> {
     }
 
     @Override
-    protected SignalState newTileState() {
+    public SignalState newTileState() {
         return new SignalState();
     }
 
@@ -74,8 +75,13 @@ public class CellularTile extends QSTile<QSTile.SignalState> {
     }
 
     @Override
-    public QSTileView createTileView(Context context) {
+    public QSIconView createTileView(Context context) {
         return new SignalTileView(context);
+    }
+
+    @Override
+    public Intent getLongClickIntent() {
+        return CELLULAR_SETTINGS;
     }
 
     @Override
@@ -89,9 +95,12 @@ public class CellularTile extends QSTile<QSTile.SignalState> {
     }
 
     @Override
+    public CharSequence getTileLabel() {
+        return mContext.getString(R.string.quick_settings_cellular_detail_title);
+    }
+
+    @Override
     protected void handleUpdateState(SignalState state, Object arg) {
-        state.visible = mController.hasMobileDataFeature();
-        if (!state.visible) return;
         CallbackInfo cb = (CallbackInfo) arg;
         if (cb == null) {
             cb = mSignalCallback.mInfo;
@@ -117,18 +126,38 @@ public class CellularTile extends QSTile<QSTile.SignalState> {
         final String signalContentDesc = cb.enabled && (cb.mobileSignalIconId > 0)
                 ? cb.signalContentDescription
                 : r.getString(R.string.accessibility_no_signal);
-        final String dataContentDesc = cb.enabled && (cb.dataTypeIconId > 0) && !cb.wifiEnabled
-                ? cb.dataContentDescription
-                : r.getString(R.string.accessibility_no_data);
-        state.contentDescription = r.getString(
-                R.string.accessibility_quick_settings_mobile,
-                signalContentDesc, dataContentDesc,
-                state.label);
+
+        if (cb.noSim) {
+            state.contentDescription = state.label;
+        } else {
+            String enabledDesc = cb.enabled ? r.getString(R.string.accessibility_cell_data_on)
+                    : r.getString(R.string.accessibility_cell_data_off);
+
+            state.contentDescription = r.getString(
+                    R.string.accessibility_quick_settings_mobile,
+                    enabledDesc, signalContentDesc,
+                    state.label);
+            state.minimalContentDescription = r.getString(
+                    R.string.accessibility_quick_settings_mobile,
+                    r.getString(R.string.accessibility_cell_data), signalContentDesc,
+                    state.label);
+        }
+        state.contentDescription = state.contentDescription + "," + r.getString(
+                R.string.accessibility_quick_settings_open_settings, getTileLabel());
+        state.minimalAccessibilityClassName = state.expandedAccessibilityClassName
+                = Button.class.getName();
+        state.value = mDataController.isMobileDataSupported()
+                && mDataController.isMobileDataEnabled();
     }
 
     @Override
     public int getMetricsCategory() {
-        return MetricsLogger.QS_CELLULAR;
+        return MetricsEvent.QS_CELLULAR;
+    }
+
+    @Override
+    public boolean isAvailable() {
+        return mController.hasMobileDataFeature();
     }
 
     // Remove the period from the network name
@@ -154,9 +183,10 @@ public class CellularTile extends QSTile<QSTile.SignalState> {
         String enabledDesc;
         boolean noSim;
         boolean isDataTypeIconWide;
+        boolean roaming;
     }
 
-    private final class CellSignalCallback extends SignalCallbackAdapter {
+    private final class CellSignalCallback implements SignalCallback {
         private final CallbackInfo mInfo = new CallbackInfo();
         @Override
         public void setWifiIndicators(boolean enabled, IconState statusIcon, IconState qsIcon,
@@ -168,7 +198,7 @@ public class CellularTile extends QSTile<QSTile.SignalState> {
         @Override
         public void setMobileDataIndicators(IconState statusIcon, IconState qsIcon, int statusType,
                 int qsType, boolean activityIn, boolean activityOut, String typeContentDescription,
-                String description, boolean isWide, int subId) {
+                String description, boolean isWide, int subId, boolean roaming) {
             if (qsIcon == null) {
                 // Not data sim, don't display.
                 return;
@@ -182,6 +212,7 @@ public class CellularTile extends QSTile<QSTile.SignalState> {
             mInfo.activityOut = activityOut;
             mInfo.enabledDesc = description;
             mInfo.isDataTypeIconWide = qsType != 0 && isWide;
+            mInfo.roaming = roaming;
             refreshState(mInfo);
         }
 
@@ -216,8 +247,8 @@ public class CellularTile extends QSTile<QSTile.SignalState> {
     private final class CellularDetailAdapter implements DetailAdapter {
 
         @Override
-        public int getTitle() {
-            return R.string.quick_settings_cellular_detail_title;
+        public CharSequence getTitle() {
+            return mContext.getString(R.string.quick_settings_cellular_detail_title);
         }
 
         @Override
@@ -234,13 +265,13 @@ public class CellularTile extends QSTile<QSTile.SignalState> {
 
         @Override
         public void setToggleState(boolean state) {
-            MetricsLogger.action(mContext, MetricsLogger.QS_CELLULAR_TOGGLE, state);
+            MetricsLogger.action(mContext, MetricsEvent.QS_CELLULAR_TOGGLE, state);
             mDataController.setMobileDataEnabled(state);
         }
 
         @Override
         public int getMetricsCategory() {
-            return MetricsLogger.QS_DATAUSAGEDETAIL;
+            return MetricsEvent.QS_DATAUSAGEDETAIL;
         }
 
         @Override
@@ -248,9 +279,11 @@ public class CellularTile extends QSTile<QSTile.SignalState> {
             final DataUsageDetailView v = (DataUsageDetailView) (convertView != null
                     ? convertView
                     : LayoutInflater.from(mContext).inflate(R.layout.data_usage, parent, false));
-            final DataUsageInfo info = mDataController.getDataUsageInfo();
+            final DataUsageController.DataUsageInfo info = mDataController.getDataUsageInfo();
             if (info == null) return v;
             v.bind(info);
+            v.findViewById(R.id.roaming_text).setVisibility(mSignalCallback.mInfo.roaming
+                    ? View.VISIBLE : View.INVISIBLE);
             return v;
         }
 

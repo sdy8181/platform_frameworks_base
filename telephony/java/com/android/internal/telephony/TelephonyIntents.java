@@ -15,6 +15,7 @@
  */
 
 package com.android.internal.telephony;
+import android.content.Intent;
 
 /**
  * The intents that the telephony services broadcast.
@@ -167,28 +168,6 @@ public class TelephonyIntents {
             = "android.intent.action.ANY_DATA_STATE";
 
     /**
-     * Broadcast Action: Occurs when a data connection connects to a provisioning apn
-     * and is broadcast by the low level data connection code.
-     * The intent will have the following extra values:</p>
-     * <dl>
-     *   <dt>apn</dt><dd>A string that is the APN associated with this connection.</dd>
-     *   <dt>apnType</dt><dd>A string array of APN types associated with this connection.
-     *      The APN type {@code *} is a special type that means this APN services all types.</dd>
-     *   <dt>linkProperties</dt><dd>{@code LinkProperties} for this APN.</dd>
-     *   <dt>linkCapabilities</dt><dd>The {@code LinkCapabilities} for this APN.</dd>
-     *   <dt>iface</dt><dd>A string that is the name of the interface.</dd>
-     * </dl>
-     *
-     * <p class="note">
-     * Requires the READ_PHONE_STATE permission.
-     *
-     * <p class="note">This is a protected intent that can only be sent
-     * by the system.
-     */
-    public static final String ACTION_DATA_CONNECTION_CONNECTED_TO_PROVISIONING_APN
-            = "android.intent.action.DATA_CONNECTION_CONNECTED_TO_PROVISIONING_APN";
-
-    /**
      * Broadcast Action: An attempt to establish a data connection has failed.
      * The intent will have the following extra values:</p>
      * <dl>
@@ -283,16 +262,7 @@ public class TelephonyIntents {
      * by the system.
      */
     public static final String ACTION_SHOW_NOTICE_ECM_BLOCK_OTHERS
-            = "android.intent.action.ACTION_SHOW_NOTICE_ECM_BLOCK_OTHERS";
-
-    /**
-     * Activity Action: Start this activity to invoke the carrier setup app.
-     * The carrier app must be signed using a certificate that matches the UICC access rules.
-     *
-     * <p class="note">Callers of this should hold the android.permission.INVOKE_CARRIER_SETUP
-     * permission.</p>
-     */
-    public static final String ACTION_CARRIER_SETUP = "android.intent.action.ACTION_CARRIER_SETUP";
+            = "com.android.internal.intent.action.ACTION_SHOW_NOTICE_ECM_BLOCK_OTHERS";
 
     /**
      * <p>Broadcast Action: Indicates that the action is forbidden by network.
@@ -365,9 +335,11 @@ public class TelephonyIntents {
      * <ul>
      *   <li><em>subscription</em> - A int, the current default subscription.</li>
      * </ul>
+     * @deprecated Use {@link Intent#ACTION_DEFAULT_SUBSCRIPTION_CHANGED}
      */
+    @Deprecated
     public static final String ACTION_DEFAULT_SUBSCRIPTION_CHANGED
-            = "android.intent.action.ACTION_DEFAULT_SUBSCRIPTION_CHANGED";
+            = Intent.ACTION_DEFAULT_SUBSCRIPTION_CHANGED;
 
     /**
      * Broadcast Action: The default data subscription has changed.  This has the following
@@ -395,9 +367,11 @@ public class TelephonyIntents {
      * <ul>
      *   <li><em>subscription</em> - A int, the current sms default subscription.</li>
      * </ul>
+     * @deprecated Use {@link Intent#ACTION_DEFAULT_SMS_SUBSCRIPTION_CHANGED}
      */
+    @Deprecated
     public static final String ACTION_DEFAULT_SMS_SUBSCRIPTION_CHANGED
-            = "android.intent.action.ACTION_DEFAULT_SMS_SUBSCRIPTION_CHANGED";
+            = Intent.ACTION_DEFAULT_SMS_SUBSCRIPTION_CHANGED;
 
     /*
      * Broadcast Action: An attempt to set phone radio type and access technology has changed.
@@ -406,6 +380,9 @@ public class TelephonyIntents {
      *   <li><em>phones radio access family </em> - A RadioAccessFamily
      *   array, contain phone ID and new radio access family for each phone.</li>
      * </ul>
+     *
+     * <p class="note">
+     * Requires the READ_PHONE_STATE permission.
      */
     public static final String ACTION_SET_RADIO_CAPABILITY_DONE =
             "android.intent.action.ACTION_SET_RADIO_CAPABILITY_DONE";
@@ -417,4 +394,75 @@ public class TelephonyIntents {
      */
     public static final String ACTION_SET_RADIO_CAPABILITY_FAILED =
             "android.intent.action.ACTION_SET_RADIO_CAPABILITY_FAILED";
+
+    /**
+     * <p>Broadcast Action: when data connections get redirected with validation failure.
+     * intended for sim/account status checks and only sent to the specified carrier app
+     * The intent will have the following extra values:</p>
+     * <ul>
+     *   <li>apnType</li><dd>A string with the apn type.</dd>
+     *   <li>redirectionUrl</li><dd>redirection url string</dd>
+     *   <li>subId</li><dd>Sub Id which associated the data connection failure.</dd>
+     * </ul>
+     * <p class="note">This is a protected intent that can only be sent by the system.</p>
+     */
+    public static final String ACTION_CARRIER_SIGNAL_REDIRECTED =
+            "com.android.internal.telephony.CARRIER_SIGNAL_REDIRECTED";
+    /**
+     * <p>Broadcast Action: when data connections setup fails.
+     * intended for sim/account status checks and only sent to the specified carrier app
+     * The intent will have the following extra values:</p>
+     * <ul>
+     *   <li>apnType</li><dd>A string with the apn type.</dd>
+     *   <li>errorCode</li><dd>A integer with dataFailCause.</dd>
+     *   <li>subId</li><dd>Sub Id which associated the data connection failure.</dd>
+     * </ul>
+     * <p class="note">This is a protected intent that can only be sent by the system. </p>
+     */
+    public static final String ACTION_CARRIER_SIGNAL_REQUEST_NETWORK_FAILED =
+            "com.android.internal.telephony.CARRIER_SIGNAL_REQUEST_NETWORK_FAILED";
+
+    /**
+     * <p>Broadcast Action: when pco value is available.
+     * intended for sim/account status checks and only sent to the specified carrier app
+     * The intent will have the following extra values:</p>
+     * <ul>
+     *   <li>apnType</li><dd>A string with the apn type.</dd>
+     *   <li>apnProto</li><dd>A string with the protocol of the apn connection (IP,IPV6,
+     *                        IPV4V6)</dd>
+     *   <li>pcoId</li><dd>An integer indicating the pco id for the data.</dd>
+     *   <li>pcoValue</li><dd>A byte array of pco data read from modem.</dd>
+     *   <li>subId</li><dd>Sub Id which associated the data connection.</dd>
+     * </ul>
+     * <p class="note">This is a protected intent that can only be sent by the system. </p>
+     */
+    public static final String ACTION_CARRIER_SIGNAL_PCO_VALUE =
+            "com.android.internal.telephony.CARRIER_SIGNAL_PCO_VALUE";
+
+    /**
+     * <p>Broadcast Action: when framework reset all carrier actions on sim load or absent.
+     * intended for carrier apps clean up (clear UI e.g.) and only sent to the specified carrier app
+     * The intent will have the following extra values:</p>
+     * <ul>
+     *   <li>subId</li><dd>Sub Id which associated the data connection failure.</dd>
+     * </ul>
+     * <p class="note">This is a protected intent that can only be sent by the system.</p>
+     */
+    public static final String ACTION_CARRIER_SIGNAL_RESET =
+            "com.android.internal.telephony.CARRIER_SIGNAL_RESET";
+
+    // CARRIER_SIGNAL_ACTION extra keys
+    public static final String EXTRA_REDIRECTION_URL_KEY = "redirectionUrl";
+    public static final String EXTRA_ERROR_CODE_KEY = "errorCode";
+    public static final String EXTRA_APN_TYPE_KEY = "apnType";
+    public static final String EXTRA_APN_PROTO_KEY = "apnProto";
+    public static final String EXTRA_PCO_ID_KEY = "pcoId";
+    public static final String EXTRA_PCO_VALUE_KEY = "pcoValue";
+
+
+   /**
+     * Broadcast action to trigger CI OMA-DM Session.
+    */
+    public static final String ACTION_REQUEST_OMADM_CONFIGURATION_UPDATE =
+            "com.android.omadm.service.CONFIGURATION_UPDATE";
 }

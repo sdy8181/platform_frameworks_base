@@ -16,21 +16,24 @@
 
 package android.net.wifi;
 
-import android.net.wifi.BatchedScanResult;
-import android.net.wifi.BatchedScanSettings;
+
+import android.content.pm.ParceledListSlice;
+
+import android.net.wifi.hotspot2.PasspointConfiguration;
+
 import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.ScanSettings;
-import android.net.wifi.WifiChannel;
 import android.net.wifi.ScanResult;
+import android.net.wifi.PasspointManagementObjectDefinition;
 import android.net.wifi.WifiConnectionStatistics;
 import android.net.wifi.WifiActivityEnergyInfo;
 import android.net.Network;
 
 import android.net.DhcpInfo;
 
-
 import android.os.Messenger;
+import android.os.ResultReceiver;
 import android.os.WorkSource;
 
 /**
@@ -44,13 +47,33 @@ interface IWifiManager
 
     WifiActivityEnergyInfo reportActivityInfo();
 
-    List<WifiConfiguration> getConfiguredNetworks();
+    /**
+     * Requests the controller activity info asynchronously.
+     * The implementor is expected to reply with the
+     * {@link android.net.wifi.WifiActivityEnergyInfo} object placed into the Bundle with the key
+     * {@link android.os.BatteryStats#RESULT_RECEIVER_CONTROLLER_KEY}. The result code is ignored.
+     */
+    oneway void requestActivityInfo(in ResultReceiver result);
 
-    List<WifiConfiguration> getPrivilegedConfiguredNetworks();
+    ParceledListSlice getConfiguredNetworks();
+
+    ParceledListSlice getPrivilegedConfiguredNetworks();
 
     WifiConfiguration getMatchingWifiConfig(in ScanResult scanResult);
 
     int addOrUpdateNetwork(in WifiConfiguration config);
+
+    boolean addOrUpdatePasspointConfiguration(in PasspointConfiguration config);
+
+    boolean removePasspointConfiguration(in String fqdn);
+
+    List<PasspointConfiguration> getPasspointConfigurations();
+
+    void queryPasspointIcon(long bssid, String fileName);
+
+    int matchProviderWithCurrentNetwork(String fqdn);
+
+    void deauthenticateNetwork(long holdoff, boolean ess);
 
     boolean removeNetwork(int netId);
 
@@ -58,13 +81,7 @@ interface IWifiManager
 
     boolean disableNetwork(int netId);
 
-    boolean pingSupplicant();
-
-    List<WifiChannel> getChannelList();
-
     void startScan(in ScanSettings requested, in WorkSource ws);
-
-    void startLocationRestrictedScan(in WorkSource ws);
 
     List<ScanResult> getScanResults(String callingPackage);
 
@@ -76,17 +93,13 @@ interface IWifiManager
 
     WifiInfo getConnectionInfo();
 
-    boolean setWifiEnabled(boolean enable);
+    boolean setWifiEnabled(String packageName, boolean enable);
 
     int getWifiEnabledState();
 
     void setCountryCode(String country, boolean persist);
 
     String getCountryCode();
-
-    void setFrequencyBand(int band, boolean persist);
-
-    int getFrequencyBand();
 
     boolean isDualBandSupported();
 
@@ -112,39 +125,23 @@ interface IWifiManager
 
     void setWifiApEnabled(in WifiConfiguration wifiConfig, boolean enable);
 
+    void updateInterfaceIpState(String ifaceName, int mode);
+
+    boolean startSoftAp(in WifiConfiguration wifiConfig);
+
+    boolean stopSoftAp();
+
     int getWifiApEnabledState();
 
     WifiConfiguration getWifiApConfiguration();
 
-    WifiConfiguration buildWifiConfig(String uriString, String mimeType, in byte[] data);
-
     void setWifiApConfiguration(in WifiConfiguration wifiConfig);
 
-    void startWifi();
-
-    void stopWifi();
-
-    void addToBlacklist(String bssid);
-
-    void clearBlacklist();
-
     Messenger getWifiServiceMessenger();
-
-    String getConfigFile();
 
     void enableTdls(String remoteIPAddress, boolean enable);
 
     void enableTdlsWithMacAddress(String remoteMacAddress, boolean enable);
-
-    boolean requestBatchedScan(in BatchedScanSettings requested, IBinder binder, in WorkSource ws);
-
-    void stopBatchedScan(in BatchedScanSettings requested);
-
-    List<BatchedScanResult> getBatchedScanResults(String callingPackage);
-
-    boolean isBatchedScanSupported();
-
-    void pollBatchedScan();
 
     String getWpsNfcConfigurationToken(int netId);
 
@@ -158,11 +155,10 @@ interface IWifiManager
     void setAllowScansWithTraffic(int enabled);
     int getAllowScansWithTraffic();
 
-    void setHalBasedAutojoinOffload(int enabled);
-    int getHalBasedAutojoinOffload();
-
-    boolean enableAutoJoinWhenAssociated(boolean enabled);
+    boolean setEnableAutoJoinWhenAssociated(boolean enabled);
     boolean getEnableAutoJoinWhenAssociated();
+
+    void enableWifiConnectivityManager(boolean enabled);
 
     WifiConnectionStatistics getConnectionStatistics();
 
@@ -171,5 +167,11 @@ interface IWifiManager
     void factoryReset();
 
     Network getCurrentNetwork();
+
+    byte[] retrieveBackupData();
+
+    void restoreBackupData(in byte[] data);
+
+    void restoreSupplicantBackupData(in byte[] supplicantData, in byte[] ipConfigData);
 }
 

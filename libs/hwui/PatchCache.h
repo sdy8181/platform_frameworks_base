@@ -51,7 +51,7 @@ class Caches;
 
 class PatchCache {
 public:
-    PatchCache(RenderState& renderState);
+    explicit PatchCache(RenderState& renderState);
     ~PatchCache();
     void init();
 
@@ -169,7 +169,7 @@ private:
 #endif
 
     RenderState& mRenderState;
-    uint32_t mMaxSize;
+    const uint32_t mMaxSize;
     uint32_t mSize;
 
     LruCache<PatchDescription, Patch*> mCache;

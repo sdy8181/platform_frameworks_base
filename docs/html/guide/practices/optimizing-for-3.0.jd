@@ -4,7 +4,7 @@ excludeFromSuggestions=true
 
 
 <div id="deprecatedSticker">
-  <a href="#" 
+  <a href="#"
      onclick="$('#naMessage').show();$('#deprecatedSticker').hide();return false">
     <strong>This doc is deprecated</strong></a>
 </div>
@@ -105,11 +105,8 @@ for tablets and similar devices.</li>
 <p>To start testing and developing your application on Android 3.0, set up your existing Android
 SDK with the new platform:</p>
 
-<p>(If you don't have an existing Android SDK, <a href="{@docRoot}sdk/index.html">download the
-SDK starter package now</a>.)</p>
-
 <ol>
-  <li><a href="{@docRoot}sdk/exploring.html#launching">Launch the Android SDK
+  <li><a href="{@docRoot}studio/intro/update.html#launching">Launch the Android SDK
 Manager</a> and install the following:
     <ul>
       <li>SDK Platform Android 3.0</li>
@@ -184,7 +181,7 @@ larger screens.</p>
       <li>Perform your usual tests to be sure everything works and looks as expected.</li>
     </ol>
   </li>
-  
+
   <li><b>Apply the new "holographic" theme to your application</b>
     <ol>
       <li>Open your manifest file and update the <a
@@ -194,7 +191,7 @@ href="{@docRoot}guide/topics/manifest/uses-sdk-element.html#target">{@code
 android:targetSdkVersion}</a> to {@code "11"}. For example:
 <pre>
 &lt;manifest ... >
-    &lt;uses-sdk android:minSdkVersion="4" 
+    &lt;uses-sdk android:minSdkVersion="4"
               android:targetSdkVersion="11" /&gt;
     &lt;application ... >
         ...
@@ -421,7 +418,7 @@ href="{@docRoot}about/versions/android-3.0.html">Android 3.0 Platform</a> docume
 <p>Many of the new features and APIs that are described above and in the <a
 href="{@docRoot}about/versions/android-3.0.html#api">Android 3.0 Platform</a> document also have accompanying
 samples that allow you to preview the effects and can help you understand how to use them. To get
-the samples, download them from the SDK repository <a href="{@docRoot}sdk/exploring.html"
+the samples, download them from the SDK repository <a href="{@docRoot}studio/intro/update.html"
 >using the Android SDK Manager</a>. After downloading the samples ("Samples for SDK API
 11"), you can find them in <code>&lt;sdk_root&gt;/samples/android-11/</code>. The following list
 provides links to the browsable source code for some of the samples:</p>
@@ -449,7 +446,7 @@ Multi-choice List</a>: An example of how to provide multiple-choice selection fo
 GridView.</li>
   <li><a
 href="{@docRoot}resources/samples/ApiDemos/src/com/example/android/apis/app/LoaderThrottle.html">
-Content Loaders</a>: An example using new Loader APIs to asynchronously load data.</li>      
+Content Loaders</a>: An example using new Loader APIs to asynchronously load data.</li>
   <li><a
 href="{@docRoot}resources/samples/ApiDemos/src/com/example/android/apis/animation/index.html">
 Property Animation</a>: Several samples using the new animation APIs to animate object
@@ -627,7 +624,7 @@ landscape orientation and that is how most users will use them. So, you should e
 application can function in landscape. Even if you want to avoid rotating the screen while your
 application is running, you should not assume that portrait is the device's default orientation. You
 should either ensure that your layout is usable in both portrait and landscape orientations or
-provide an <a href="{@docRoot}guide/topics/resources/providing-resources.html#AlternativeResources" 
+provide an <a href="{@docRoot}guide/topics/resources/providing-resources.html#AlternativeResources"
 >alternative layout resource</a> for landscape orientation.</p>
 
 <p>If you believe your application or game provides its best experience when the screen is tall,

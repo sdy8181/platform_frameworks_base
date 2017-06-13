@@ -39,7 +39,7 @@ group. </p>
 <pre>
 &lt;?xml version="1.0" encoding="utf-8"?>
 &lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:layout_width="fill_parent" 
+              android:layout_width="fill_parent"
               android:layout_height="fill_parent"
               android:orientation="vertical" >
     &lt;TextView android:id="@+id/text"
@@ -60,14 +60,14 @@ layout.</p>
 <p>For a complete guide to creating a UI layout, see <a href="declaring-layout.html">XML
 Layouts</a>.
 
-  
+
 <h2 id="UIComponents">User Interface Components</h2>
 
 <p>You don't have to build all of your UI using {@link android.view.View} and {@link
 android.view.ViewGroup} objects. Android provides several app components that offer
 a standard UI layout for which you simply need to define the content. These UI components each
 have a unique set of APIs that are described in their respective documents, such as <a
-href="{@docRoot}guide/topics/ui/actionbar.html">Action Bar</a>, <a
+href="{@docRoot}training/appbar/index.html">Adding the App Bar</a>, <a
 href="{@docRoot}guide/topics/ui/dialogs.html">Dialogs</a>, and <a
 href="{@docRoot}guide/topics/ui/notifiers/notifications.html">Status Notifications</a>.</p>
 

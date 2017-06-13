@@ -178,6 +178,20 @@ android.content.Context#MODE_APPEND}, {@link
 android.content.Context#MODE_WORLD_READABLE}, and {@link
 android.content.Context#MODE_WORLD_WRITEABLE}.</p>
 
+<p class="note"><strong>Note:</strong> The constants {@link
+android.content.Context#MODE_WORLD_READABLE} and {@link
+android.content.Context#MODE_WORLD_WRITEABLE} have been deprecated since API level 17.
+Starting from Android N their use will result in a {@link java.lang.SecurityException}
+to be thrown.
+This means that apps targeting Android N and higher
+cannot share private files by name, and attempts to share a "file://" URI will result in a
+{@link android.os.FileUriExposedException} to be thrown. If your app needs to share private
+files with other apps, it may use a {@link android.support.v4.content.FileProvider} with
+the {@link android.content.Intent#FLAG_GRANT_READ_URI_PERMISSION}.
+See also <a
+href="{@docRoot}training/secure-file-sharing/index.html">Sharing Files</a>.
+</p>
+
 <p>To read a file from internal storage:</p>
 
 <ol>
@@ -237,6 +251,17 @@ be modified by the user when they enable USB mass storage to transfer files on a
 external storage on a computer or removes the media, and there's no security enforced upon files you
 save to the external storage. All applications can read and write files placed on the external
 storage and the user can remove them.</p>
+
+<h3 id="ScopedDirAccess">Using Scoped Directory Access</h3>
+
+On Android 7.0 or later, if you need access to a specific directory on
+external storage, use scoped directory access. Scoped directory access
+simplifies how your application accesses standard external storage directories,
+such as the <code>Pictures</code> directory, and provides a simple
+permissions UI that clearly details what directory the application is
+requesting access to. For more details on scoped directory access, see
+<a href="{@docRoot}training/articles/scoped-directory-access.html">Using
+Scoped Directory Access</a>.
 
 <h3 id="ExternalPermissions">Getting access to external storage</h3>
 

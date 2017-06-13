@@ -25,7 +25,7 @@ parent.link=manifest-intro.html
           android:<a href="#hwaccel">hardwareAccelerated</a>=["true" | "false"]
           android:<a href="#icon">icon</a>="<i>drawable resource</i>"
           android:<a href="#label">label</a>="<i>string resource</i>"
-          android:<a href="#lmode">launchMode</a>=["multiple" | "singleTop" |
+          android:<a href="#lmode">launchMode</a>=["standard" | "singleTop" |
                               "singleTask" | "singleInstance"]
           android:<a href="#maxRecents">maxRecents</a>="<i>integer</i>"
           android:<a href="#multi">multiprocess</a>=["true" | "false"]
@@ -35,6 +35,7 @@ parent.link=manifest-intro.html
           android:<a href="#prmsn">permission</a>="<i>string</i>"
           android:<a href="#proc">process</a>="<i>string</i>"
           android:<a href="#relinquish">relinquishTaskIdentity</a>=["true" | "false"]
+          android:<a href="#resizeableActivity">resizeableActivity</a>=["true" | "false"]
           android:<a href="#screen">screenOrientation</a>=["unspecified" | "behind" |
                                      "landscape" | "portrait" |
                                      "reverseLandscape" | "reversePortrait" |
@@ -43,6 +44,7 @@ parent.link=manifest-intro.html
                                      "sensor" | "fullSensor" | "nosensor" |
                                      "user" | "fullUser" | "locked"]
           android:<a href="#state">stateNotNeeded</a>=["true" | "false"]
+          android:<a href="#supportsPIP">supportsPictureInPicture</a>=["true" | "false"]
           android:<a href="#aff">taskAffinity</a>="<i>string</i>"
           android:<a href="#theme">theme</a>="<i>resource or theme</i>"
           android:<a href="#uioptions">uiOptions</a>=["none" | "splitActionBarWhenNarrow"]
@@ -714,7 +716,7 @@ For example:</p>
 &lt;activity
     android:name="com.example.app.ChildActivity"
     android:label="@string/title_child_activity"
-    android:parentActivityName="com.example.myfirstapp.MainActivity" >
+    android:parentActivityName="com.example.app.MainActivity" >
     &lt;!-- Parent activity meta-data to support API level 4+ -->
     &lt;meta-data
         android:name="android.support.PARENT_ACTIVITY"
@@ -794,9 +796,39 @@ to "{@code false}". The default value is "{@code false}".
 and icons in the <a href="{@docRoot}guide/components/recents.html">overview screen</a>.</p>
 </dd>
 
+<dt id="resizeableActivity"><code>resizeableActivity</code></dt>
+
+<dd>
+<p>
+  Specifies whether the app supports <a href=
+  "{@docRoot}guide/topics/ui/multi-window.html">multi-window display</a>. You
+  can set this attribute in either the <code>&lt;activity&gt;</code> or
+  <a href="application-element.html"><code>&lt;application&gt;</code></a>
+  element.
+</p>
+
+<p>
+  If you set this attribute to true, the user can launch the activity in
+  split-screen and freeform modes. If you set the attribute to false, the
+  activity does not support multi-window mode. If this value is false, and the
+  user attempts to launch the activity in multi-window mode, the activity takes
+  over the full screen.
+</p>
+
+<p>
+  If your app targets API level 24 or higher, but you do not specify a value
+  for this attribute, the attribute's value defaults to true.
+</p>
+
+<p>
+  This attribute was added in API level 24.
+</p>
+</dd>
 
 <dt><a name="screen"></a>{@code android:screenOrientation}</dt>
-<dd>The orientation of the activity's display on the device.
+<dd>The orientation of the activity's display on the device. The system ignores
+  this attribute if the activity is running in <a
+  href="{@docRoot}guide/topics/ui/multi-window.html">multi-window mode</a>.
 
 <p>The value can be any one of the following strings:</p>
 
@@ -921,6 +953,19 @@ home screen uses this setting to make sure that it does not get removed if it
 crashes for some reason.
 </p></dd>
 
+<dt id="supportsPIP"><code>supportsPictureInPicture</code></dt>
+
+<dd>
+<p>
+  Specifies whether the activity supports <a href=
+  "{@docRoot}training/tv/playback/picture-in-picture.jd">Picture-in-Picture</a>
+  display. The system ignores this attribute if <a href=
+  "#resizeableActivity"><code>android:resizeableActivity</code></a> is false.
+</p>
+
+<p>This attribute was added in API level 24.</p>
+</dd>
+
 <dt><a name="aff"></a>{@code android:taskAffinity}</dt>
 <dd>The task that the activity has an affinity for.  Activities with
 the same affinity conceptually belong to the same task (to the same
@@ -982,16 +1027,17 @@ href="{@docRoot}guide/topics/ui/themes.html">Styles and Themes</a> developer gui
     <tr><th>Value</th><th>Description</th></tr>
     <tr><td>{@code "none"}</td><td>No extra UI options. This is the default.</td></tr>
     <tr><td>{@code "splitActionBarWhenNarrow"}</td><td>Add a bar at
-the bottom of the screen to display action items in the {@link android.app.ActionBar}, when
+the bottom of the screen to display action items in the <em>app bar</em> (also known as the
+<em>action bar</em>), when
 constrained for horizontal space (such as when in portrait mode on a handset). Instead of a small
-number of action items appearing in the action bar at the top of the screen, the action bar is
+number of action items appearing in the app bar at the top of the screen, the app bar is
 split into the top navigation section and the bottom bar for action items. This ensures a reasonable
 amount of space is made available not only for the action items, but also for navigation and title
 elements at the top. Menu items are not split across the two bars; they always appear
 together.</td></tr>
   </table>
-  <p>For more information about the action bar, see the <a
-href="{@docRoot}guide/topics/ui/actionbar.html">Action Bar</a> developer guide.</p>
+  <p>For more information about the app bar, see the <a
+href="{@docRoot}training/appbar/index.html">Adding the App Bar</a> training class.</p>
   <p>This attribute was added in API level 14.</p>
 </dd>
 

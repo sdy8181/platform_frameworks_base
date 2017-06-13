@@ -17,9 +17,9 @@
 #ifndef AAPT_STRING_POOL_H
 #define AAPT_STRING_POOL_H
 
-#include "BigBuffer.h"
+#include "util/BigBuffer.h"
 #include "ConfigDescription.h"
-#include "StringPiece.h"
+#include "util/StringPiece.h"
 
 #include <functional>
 #include <map>
@@ -65,7 +65,7 @@ public:
     private:
         friend class StringPool;
 
-        Ref(Entry* entry);
+        explicit Ref(Entry* entry);
 
         Entry* mEntry;
     };
@@ -88,7 +88,7 @@ public:
     private:
         friend class StringPool;
 
-        StyleRef(StyleEntry* entry);
+        explicit StyleRef(StyleEntry* entry);
 
         StyleEntry* mEntry;
     };

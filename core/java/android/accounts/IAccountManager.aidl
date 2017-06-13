@@ -19,8 +19,10 @@ package android.accounts;
 import android.accounts.IAccountManagerResponse;
 import android.accounts.Account;
 import android.accounts.AuthenticatorDescription;
+import android.content.IntentSender;
 import android.os.Bundle;
-
+import android.os.RemoteCallback;
+import android.os.UserHandle;
 
 /**
  * Central application service that provides account management.
@@ -74,13 +76,40 @@ interface IAccountManager {
         String authTokenType);
 
     /* Shared accounts */
-    boolean addSharedAccountAsUser(in Account account, int userId);
     Account[] getSharedAccountsAsUser(int userId);
     boolean removeSharedAccountAsUser(in Account account, int userId);
+    void addSharedAccountsFromParentUser(int parentUserId, int userId);
 
     /* Account renaming. */
     void renameAccount(in IAccountManagerResponse response, in Account accountToRename, String newName);
     String getPreviousName(in Account account);
     boolean renameSharedAccountAsUser(in Account accountToRename, String newName, int userId);
 
+    /* Add account in two steps. */
+    void startAddAccountSession(in IAccountManagerResponse response, String accountType,
+        String authTokenType, in String[] requiredFeatures, boolean expectActivityLaunch,
+        in Bundle options);
+
+    /* Update credentials in two steps. */
+    void startUpdateCredentialsSession(in IAccountManagerResponse response, in Account account,
+        String authTokenType, boolean expectActivityLaunch, in Bundle options);
+
+    /* Finish session started by startAddAccountSession(...) or startUpdateCredentialsSession(...) for user */
+    void finishSessionAsUser(in IAccountManagerResponse response, in Bundle sessionBundle,
+        boolean expectActivityLaunch, in Bundle appInfo, int userId);
+
+    /* Check if an account exists on any user on the device. */
+    boolean someUserHasAccount(in Account account);
+
+    /* Check if credentials update is suggested */
+    void isCredentialsUpdateSuggested(in IAccountManagerResponse response, in Account account,
+        String statusToken);
+
+    /* Check if the package in a user can access an account */
+    boolean hasAccountAccess(in Account account, String packageName, in UserHandle userHandle);
+    /* Crate an intent to request account access for package and a given user id */
+    IntentSender createRequestAccountAccessIntentSenderAsUser(in Account account,
+        String packageName, in UserHandle userHandle);
+
+    void onAccountAccessed(String token);
 }

@@ -16,17 +16,17 @@
 
 package android.test;
 
-import com.google.android.collect.Sets;
-
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Set;
 
 /**
  * The Package object doesn't allow you to iterate over the contained
  * classes and subpackages of that package.  This is a version that does.
- * 
+ *
  * {@hide} Not needed for 1.0 SDK.
  */
+@Deprecated
 public class ClassPathPackageInfo {
 
     private final ClassPathPackageInfoSource source;
@@ -43,7 +43,7 @@ public class ClassPathPackageInfo {
     }
 
     public Set<ClassPathPackageInfo> getSubpackages() {
-        Set<ClassPathPackageInfo> info = Sets.newHashSet();
+        Set<ClassPathPackageInfo> info = new HashSet<>();
         for (String name : subpackageNames) {
             info.add(source.getPackageInfo(name));
         }
@@ -51,7 +51,7 @@ public class ClassPathPackageInfo {
     }
 
     public Set<Class<?>> getTopLevelClassesRecursive() {
-        Set<Class<?>> set = Sets.newHashSet();
+        Set<Class<?>> set = new HashSet<>();
         addTopLevelClassesTo(set);
         return set;
     }

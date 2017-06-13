@@ -18,6 +18,7 @@ package android.hardware.camera2;
 
 import android.annotation.NonNull;
 import android.annotation.Nullable;
+import android.hardware.camera2.params.OutputConfiguration;
 import android.os.Handler;
 import android.view.Surface;
 
@@ -218,6 +219,53 @@ public abstract class CameraCaptureSession implements AutoCloseable {
      * @hide
      */
     public abstract void tearDown(@NonNull Surface surface) throws CameraAccessException;
+
+    /**
+     * <p>
+     * Finish the deferred output configurations where the output Surface was not configured before.
+     * </p>
+     * <p>
+     * For camera use cases where a preview and other output configurations need to be configured,
+     * it can take some time for the preview Surface to be ready (e.g., if the preview Surface is
+     * obtained from {@link android.view.SurfaceView}, the SurfaceView is ready after the UI layout
+     * is done, then it takes some time to get the preview Surface).
+     * </p>
+     * <p>
+     * To speed up camera startup time, the application can configure the
+     * {@link CameraCaptureSession} with the desired preview size, and defer the preview output
+     * configuration until the Surface is ready. After the {@link CameraCaptureSession} is created
+     * successfully with this deferred configuration and other normal configurations, the
+     * application can submit requests that don't include deferred output Surfaces. Once the
+     * deferred Surface is ready, the application can set the Surface to the same deferred output
+     * configuration with the {@link OutputConfiguration#setDeferredSurface} method, and then finish
+     * the deferred output configuration via this method, before it can submit requests with this
+     * output target.
+     * </p>
+     * <p>
+     * The output Surfaces included by this list of deferred {@link OutputConfiguration
+     * OutputConfigurations} can be used as {@link CaptureRequest} targets as soon as this call
+     * returns;
+     * </p>
+     * <p>
+     * This method is not supported by Legacy devices.
+     * </p>
+     *
+     * @param deferredOutputConfigs a list of {@link OutputConfiguration OutputConfigurations} that
+     *            have had {@link OutputConfiguration#setDeferredSurface setDeferredSurface} invoked
+     *            with a valid output Surface.
+     * @throws CameraAccessException if the camera device is no longer connected or has encountered
+     *             a fatal error.
+     * @throws IllegalStateException if this session is no longer active, either because the session
+     *             was explicitly closed, a new session has been created or the camera device has
+     *             been closed. Or if this output configuration was already finished with the
+     *             included surface before.
+     * @throws IllegalArgumentException for invalid output configurations, including ones where the
+     *             source of the Surface is no longer valid or the Surface is from a unsupported
+     *             source.
+     * @hide
+     */
+    public abstract void finishDeferredConfiguration(
+            List<OutputConfiguration> deferredOutputConfigs) throws CameraAccessException;
 
     /**
      * <p>Submit a request for an image to be captured by the camera device.</p>
@@ -847,6 +895,9 @@ public abstract class CameraCaptureSession implements AutoCloseable {
          * to make forward progress from the partial results and avoid waiting for the completed
          * result.</p>
          *
+         * <p>For a particular request, {@link #onCaptureProgressed} may happen before or after
+         * {@link #onCaptureStarted}.</p>
+         *
          * <p>Each request will generate at least {@code 1} partial results, and at most
          * {@link CameraCharacteristics#REQUEST_PARTIAL_RESULT_COUNT} partial results.</p>
          *
@@ -985,6 +1036,30 @@ public abstract class CameraCaptureSession implements AutoCloseable {
          */
         public void onCaptureSequenceAborted(@NonNull CameraCaptureSession session,
                 int sequenceId) {
+            // default empty implementation
+        }
+
+        /**
+         * <p>This method is called if a single buffer for a capture could not be sent to its
+         * destination surface.</p>
+         *
+         * <p>If the whole capture failed, then {@link #onCaptureFailed} will be called instead. If
+         * some but not all buffers were captured but the result metadata will not be available,
+         * then onCaptureFailed will be invoked with {@link CaptureFailure#wasImageCaptured}
+         * returning true, along with one or more calls to {@link #onCaptureBufferLost} for the
+         * failed outputs.</p>
+         *
+         * @param session
+         *            The session returned by {@link CameraDevice#createCaptureSession}
+         * @param request
+         *            The request that was given to the CameraDevice
+         * @param target
+         *            The target Surface that the buffer will not be produced for
+         * @param frameNumber
+         *            The frame number for the request
+         */
+        public void onCaptureBufferLost(@NonNull CameraCaptureSession session,
+                @NonNull CaptureRequest request, @NonNull Surface target, long frameNumber) {
             // default empty implementation
         }
     }

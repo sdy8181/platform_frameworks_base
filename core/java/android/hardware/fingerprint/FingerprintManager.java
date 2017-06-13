@@ -40,6 +40,7 @@ import java.util.List;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
 
+import static android.Manifest.permission.INTERACT_ACROSS_USERS;
 import static android.Manifest.permission.USE_FINGERPRINT;
 import static android.Manifest.permission.MANAGE_FINGERPRINT;
 
@@ -258,6 +259,7 @@ public class FingerprintManager {
     public static class AuthenticationResult {
         private Fingerprint mFingerprint;
         private CryptoObject mCryptoObject;
+        private int mUserId;
 
         /**
          * Authentication result
@@ -266,9 +268,10 @@ public class FingerprintManager {
          * @param fingerprint the recognized fingerprint data, if allowed.
          * @hide
          */
-        public AuthenticationResult(CryptoObject crypto, Fingerprint fingerprint) {
+        public AuthenticationResult(CryptoObject crypto, Fingerprint fingerprint, int userId) {
             mCryptoObject = crypto;
             mFingerprint = fingerprint;
+            mUserId = userId;
         }
 
         /**
@@ -285,6 +288,12 @@ public class FingerprintManager {
          * @hide
          */
         public Fingerprint getFingerprint() { return mFingerprint; }
+
+        /**
+         * Obtain the userId for which this fingerprint was authenticated.
+         * @hide
+         */
+        public int getUserId() { return mUserId; }
     };
 
     /**
@@ -491,12 +500,16 @@ public class FingerprintManager {
      * credentials (e.g. pin, pattern or password).
      * @param cancel an object that can be used to cancel enrollment
      * @param flags optional flags
+     * @param userId the user to whom this fingerprint will belong to
      * @param callback an object to receive enrollment events
      * @hide
      */
     @RequiresPermission(MANAGE_FINGERPRINT)
     public void enroll(byte [] token, CancellationSignal cancel, int flags,
-            EnrollmentCallback callback) {
+            int userId, EnrollmentCallback callback) {
+        if (userId == UserHandle.USER_CURRENT) {
+            userId = getCurrentUserId();
+        }
         if (callback == null) {
             throw new IllegalArgumentException("Must supply an enrollment callback");
         }
@@ -512,7 +525,8 @@ public class FingerprintManager {
 
         if (mService != null) try {
             mEnrollmentCallback = callback;
-            mService.enroll(mToken, token, getCurrentUserId(), mServiceReceiver, flags);
+            mService.enroll(mToken, token, userId, mServiceReceiver, flags,
+                    mContext.getOpPackageName());
         } catch (RemoteException e) {
             Log.w(TAG, "Remote exception in enroll: ", e);
             if (callback != null) {
@@ -535,7 +549,7 @@ public class FingerprintManager {
         if (mService != null) try {
             result = mService.preEnroll(mToken);
         } catch (RemoteException e) {
-            Log.w(TAG, "Remote exception in enroll: ", e);
+            throw e.rethrowFromSystemServer();
         }
         return result;
     }
@@ -550,25 +564,41 @@ public class FingerprintManager {
         if (mService != null) try {
             result = mService.postEnroll(mToken);
         } catch (RemoteException e) {
-            Log.w(TAG, "Remote exception in post enroll: ", e);
+            throw e.rethrowFromSystemServer();
         }
         return result;
     }
 
     /**
+     * Sets the active user. This is meant to be used to select the current profile for enrollment
+     * to allow separate enrolled fingers for a work profile
+     * @param userId
+     * @hide
+     */
+    @RequiresPermission(MANAGE_FINGERPRINT)
+    public void setActiveUser(int userId) {
+        if (mService != null) try {
+            mService.setActiveUser(userId);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
      * Remove given fingerprint template from fingerprint hardware and/or protected storage.
      * @param fp the fingerprint item to remove
+     * @param userId the user who this fingerprint belongs to
      * @param callback an optional callback to verify that fingerprint templates have been
      * successfully removed. May be null of no callback is required.
      *
      * @hide
      */
     @RequiresPermission(MANAGE_FINGERPRINT)
-    public void remove(Fingerprint fp, RemovalCallback callback) {
+    public void remove(Fingerprint fp, int userId, RemovalCallback callback) {
         if (mService != null) try {
             mRemovalCallback = callback;
             mRemovalFingerprint = fp;
-            mService.remove(mToken, fp.getFingerId(), getCurrentUserId(), mServiceReceiver);
+            mService.remove(mToken, fp.getFingerId(), fp.getGroupId(), userId, mServiceReceiver);
         } catch (RemoteException e) {
             Log.w(TAG, "Remote exception in remove: ", e);
             if (callback != null) {
@@ -581,18 +611,19 @@ public class FingerprintManager {
     /**
      * Renames the given fingerprint template
      * @param fpId the fingerprint id
+     * @param userId the user who this fingerprint belongs to
      * @param newName the new name
      *
      * @hide
      */
     @RequiresPermission(MANAGE_FINGERPRINT)
-    public void rename(int fpId, String newName) {
+    public void rename(int fpId, int userId, String newName) {
         // Renames the given fpId
         if (mService != null) {
             try {
-                mService.rename(fpId, getCurrentUserId(), newName);
+                mService.rename(fpId, userId, newName);
             } catch (RemoteException e) {
-                Log.v(TAG, "Remote exception in rename(): ", e);
+                throw e.rethrowFromSystemServer();
             }
         } else {
             Log.w(TAG, "rename(): Service not connected!");
@@ -610,7 +641,7 @@ public class FingerprintManager {
         if (mService != null) try {
             return mService.getEnrolledFingerprints(userId, mContext.getOpPackageName());
         } catch (RemoteException e) {
-            Log.v(TAG, "Remote exception in getEnrolledFingerprints: ", e);
+            throw e.rethrowFromSystemServer();
         }
         return null;
     }
@@ -634,10 +665,25 @@ public class FingerprintManager {
     @RequiresPermission(USE_FINGERPRINT)
     public boolean hasEnrolledFingerprints() {
         if (mService != null) try {
-            return mService.hasEnrolledFingerprints(UserHandle.myUserId(),
-                    mContext.getOpPackageName());
+            return mService.hasEnrolledFingerprints(
+                    UserHandle.myUserId(), mContext.getOpPackageName());
         } catch (RemoteException e) {
-            Log.v(TAG, "Remote exception in getEnrolledFingerprints: ", e);
+            throw e.rethrowFromSystemServer();
+        }
+        return false;
+    }
+
+    /**
+     * @hide
+     */
+    @RequiresPermission(allOf = {
+            USE_FINGERPRINT,
+            INTERACT_ACROSS_USERS})
+    public boolean hasEnrolledFingerprints(int userId) {
+        if (mService != null) try {
+            return mService.hasEnrolledFingerprints(userId, mContext.getOpPackageName());
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
         }
         return false;
     }
@@ -654,7 +700,7 @@ public class FingerprintManager {
                 long deviceId = 0; /* TODO: plumb hardware id to FPMS */
                 return mService.isHardwareDetected(deviceId, mContext.getOpPackageName());
             } catch (RemoteException e) {
-                Log.v(TAG, "Remote exception in isFingerprintHardwareDetected(): ", e);
+                throw e.rethrowFromSystemServer();
             }
         } else {
             Log.w(TAG, "isFingerprintHardwareDetected(): Service not connected!");
@@ -664,7 +710,7 @@ public class FingerprintManager {
 
     /**
      * Retrieves the authenticator token for binding keys to the lifecycle
-     * of the current set of fingerprints. Used only by internal clients.
+     * of the calling user's fingerprints. Used only by internal clients.
      *
      * @hide
      */
@@ -673,7 +719,7 @@ public class FingerprintManager {
             try {
                 return mService.getAuthenticatorId(mContext.getOpPackageName());
             } catch (RemoteException e) {
-                Log.v(TAG, "Remote exception in getAuthenticatorId(): ", e);
+                throw e.rethrowFromSystemServer();
             }
         } else {
             Log.w(TAG, "getAuthenticatorId(): Service not connected!");
@@ -693,7 +739,7 @@ public class FingerprintManager {
             try {
                 mService.resetTimeout(token);
             } catch (RemoteException e) {
-                Log.v(TAG, "Remote exception in resetTimeout(): ", e);
+                throw e.rethrowFromSystemServer();
             }
         } else {
             Log.w(TAG, "resetTimeout(): Service not connected!");
@@ -728,7 +774,7 @@ public class FingerprintManager {
                     }
                 });
             } catch (RemoteException e) {
-                Log.v(TAG, "Remote exception in addLockoutResetCallback(): ", e);
+                throw e.rethrowFromSystemServer();
             }
         } else {
             Log.w(TAG, "addLockoutResetCallback(): Service not connected!");
@@ -754,7 +800,7 @@ public class FingerprintManager {
                     sendAcquiredResult((Long) msg.obj /* deviceId */, msg.arg1 /* acquire info */);
                     break;
                 case MSG_AUTHENTICATION_SUCCEEDED:
-                    sendAuthenticatedSucceeded((Fingerprint) msg.obj);
+                    sendAuthenticatedSucceeded((Fingerprint) msg.obj, msg.arg1 /* userId */);
                     break;
                 case MSG_AUTHENTICATION_FAILED:
                     sendAuthenticatedFailed();
@@ -772,13 +818,16 @@ public class FingerprintManager {
             if (mRemovalCallback != null) {
                 int reqFingerId = mRemovalFingerprint.getFingerId();
                 int reqGroupId = mRemovalFingerprint.getGroupId();
-                if (fingerId != reqFingerId) {
+                if (reqFingerId != 0 && fingerId != 0  &&  fingerId != reqFingerId) {
                     Log.w(TAG, "Finger id didn't match: " + fingerId + " != " + reqFingerId);
+                    return;
                 }
                 if (groupId != reqGroupId) {
                     Log.w(TAG, "Group id didn't match: " + groupId + " != " + reqGroupId);
+                    return;
                 }
-                mRemovalCallback.onRemovalSucceeded(mRemovalFingerprint);
+                mRemovalCallback.onRemovalSucceeded(new Fingerprint(null, groupId, fingerId,
+                        deviceId));
             }
         }
 
@@ -799,9 +848,10 @@ public class FingerprintManager {
             }
         }
 
-        private void sendAuthenticatedSucceeded(Fingerprint fp) {
+        private void sendAuthenticatedSucceeded(Fingerprint fp, int userId) {
             if (mAuthenticationCallback != null) {
-                final AuthenticationResult result = new AuthenticationResult(mCryptoObject, fp);
+                final AuthenticationResult result =
+                        new AuthenticationResult(mCryptoObject, fp, userId);
                 mAuthenticationCallback.onAuthenticationSucceeded(result);
             }
         }
@@ -844,8 +894,7 @@ public class FingerprintManager {
         try {
             return ActivityManagerNative.getDefault().getCurrentUser().id;
         } catch (RemoteException e) {
-            Log.w(TAG, "Failed to get current user id\n");
-            return UserHandle.USER_NULL;
+            throw e.rethrowFromSystemServer();
         }
     }
 
@@ -853,7 +902,7 @@ public class FingerprintManager {
         if (mService != null) try {
             mService.cancelEnrollment(mToken);
         } catch (RemoteException e) {
-            if (DEBUG) Log.w(TAG, "Remote exception while canceling enrollment");
+            throw e.rethrowFromSystemServer();
         }
     }
 
@@ -861,7 +910,7 @@ public class FingerprintManager {
         if (mService != null) try {
             mService.cancelAuthentication(mToken, mContext.getOpPackageName());
         } catch (RemoteException e) {
-            if (DEBUG) Log.w(TAG, "Remote exception while canceling enrollment");
+            throw e.rethrowFromSystemServer();
         }
     }
 
@@ -941,8 +990,8 @@ public class FingerprintManager {
         }
 
         @Override // binder call
-        public void onAuthenticationSucceeded(long deviceId, Fingerprint fp) {
-            mHandler.obtainMessage(MSG_AUTHENTICATION_SUCCEEDED, fp).sendToTarget();
+        public void onAuthenticationSucceeded(long deviceId, Fingerprint fp, int userId) {
+            mHandler.obtainMessage(MSG_AUTHENTICATION_SUCCEEDED, userId, 0, fp).sendToTarget();
         }
 
         @Override // binder call
@@ -962,4 +1011,3 @@ public class FingerprintManager {
     };
 
 }
-

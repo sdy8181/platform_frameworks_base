@@ -53,9 +53,7 @@ the device throws an error, as well as log messages written from your applicatio
 those written using JavaScript {@code console} APIs.</p>
   <p>To run logcat and view messages, execute
 {@code adb logcat} from your Android SDK {@code tools/} directory, or, from DDMS, select
-<strong>Device > Run logcat</strong>. When using the <a href="{@docRoot}tools/sdk/eclipse-adt.html">ADT
-plugin for Eclipse</a>, you can also view logcat messages by opening the Logcat view, available from
-<strong>Window > Show View > Other > Android > Logcat</strong>.</p>
+<strong>Device > Run logcat</strong>.</p>
   <p>See <a href="{@docRoot}tools/debugging/debugging-log.html">Debugging</a>
   for more information about <codelogcat</code>.</p>
 </div>
@@ -94,7 +92,7 @@ expect from other web browsers.</p>
 <h2 id="WebView">Using Console APIs in WebView</h2>
 
 <p>All the console APIs shown above are also
-supported when debugging in {@link android.webkit.WebView}. 
+supported when debugging in {@link android.webkit.WebView}.
 If you're targeting Android 2.1 (API level 7) and higher, you must
 provide a {@link android.webkit.WebChromeClient}
 that implements the {@link android.webkit.WebChromeClient#onConsoleMessage(String,int,String)

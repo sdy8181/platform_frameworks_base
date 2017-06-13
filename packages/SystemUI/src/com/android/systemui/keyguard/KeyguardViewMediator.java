@@ -16,6 +16,13 @@
 
 package com.android.systemui.keyguard;
 
+import static android.provider.Settings.System.SCREEN_OFF_TIMEOUT;
+
+import static com.android.internal.telephony.IccCardConstants.State.ABSENT;
+import static com.android.internal.widget.LockPatternUtils.StrongAuthTracker.SOME_AUTH_REQUIRED_AFTER_USER_REQUEST;
+import static com.android.internal.widget.LockPatternUtils.StrongAuthTracker.STRONG_AUTH_REQUIRED_AFTER_DPM_LOCK_NOW;
+import static com.android.internal.widget.LockPatternUtils.StrongAuthTracker.STRONG_AUTH_REQUIRED_AFTER_LOCKOUT;
+
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.ActivityManagerNative;
@@ -41,8 +48,10 @@ import android.os.PowerManager;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.os.SystemProperties;
+import android.os.Trace;
 import android.os.UserHandle;
 import android.os.UserManager;
+import android.os.storage.StorageManager;
 import android.provider.Settings;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
@@ -56,6 +65,8 @@ import android.view.WindowManagerPolicy;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
 
+import com.android.internal.logging.MetricsLogger;
+import com.android.internal.logging.MetricsProto.MetricsEvent;
 import com.android.internal.policy.IKeyguardDrawnCallback;
 import com.android.internal.policy.IKeyguardExitCallback;
 import com.android.internal.policy.IKeyguardStateCallback;
@@ -68,6 +79,8 @@ import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.keyguard.KeyguardUpdateMonitorCallback;
 import com.android.keyguard.ViewMediatorCallback;
 import com.android.systemui.SystemUI;
+import com.android.systemui.SystemUIFactory;
+import com.android.systemui.classifier.FalsingManager;
 import com.android.systemui.statusbar.phone.FingerprintUnlockController;
 import com.android.systemui.statusbar.phone.PhoneStatusBar;
 import com.android.systemui.statusbar.phone.ScrimController;
@@ -77,9 +90,6 @@ import com.android.systemui.statusbar.phone.StatusBarWindowManager;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.ArrayList;
-import java.util.List;
-
-import static android.provider.Settings.System.SCREEN_OFF_TIMEOUT;
 
 /**
  * Mediates requests related to the keyguard.  This includes queries about the
@@ -134,6 +144,8 @@ public class KeyguardViewMediator extends SystemUI {
 
     private static final String DELAYED_KEYGUARD_ACTION =
         "com.android.internal.policy.impl.PhoneWindowManager.DELAYED_KEYGUARD";
+    private static final String DELAYED_LOCK_PROFILE_ACTION =
+            "com.android.internal.policy.impl.PhoneWindowManager.DELAYED_LOCK";
 
     // used for handler messages
     private static final int SHOW = 2;
@@ -191,6 +203,7 @@ public class KeyguardViewMediator extends SystemUI {
     private boolean mSystemReady;
     private boolean mBootCompleted;
     private boolean mBootSendUserPresent;
+    private boolean mShuttingDown;
 
     /** High level access to the power manager for WakeLocks */
     private PowerManager mPM;
@@ -242,6 +255,11 @@ public class KeyguardViewMediator extends SystemUI {
      * it turned off due to timeout. see {@link #onScreenTurnedOff(int)}
      */
     private int mDelayedShowingSequence;
+
+    /**
+     * Simiar to {@link #mDelayedProfileShowingSequence}, but it is for profile case.
+     */
+    private int mDelayedProfileShowingSequence;
 
     /**
      * If the user has disabled the keyguard, then requests to exit, this is
@@ -318,8 +336,13 @@ public class KeyguardViewMediator extends SystemUI {
      */
     private boolean mPendingLock;
 
+    private boolean mLockLater;
+
     private boolean mWakeAndUnlocking;
     private IKeyguardDrawnCallback mDrawnCallback;
+    private boolean mLockWhenSimRemoved;
+
+    private boolean mIsPerUserLock;
 
     KeyguardUpdateMonitorCallback mUpdateCallback = new KeyguardUpdateMonitorCallback() {
 
@@ -339,11 +362,11 @@ public class KeyguardViewMediator extends SystemUI {
         @Override
         public void onUserSwitchComplete(int userId) {
             mSwitchingUser = false;
-            if (userId != UserHandle.USER_OWNER) {
+            if (userId != UserHandle.USER_SYSTEM) {
                 UserInfo info = UserManager.get(mContext).getUserInfo(userId);
-                if (info != null && info.isGuest()) {
+                if (info != null && (info.isGuest() || info.isDemo())) {
                     // If we just switched to a guest, try to dismiss keyguard.
-                    dismiss();
+                    dismiss(false /* allowWhileOccluded */);
                 }
             }
         }
@@ -378,6 +401,12 @@ public class KeyguardViewMediator extends SystemUI {
         @Override
         public void onDeviceProvisioned() {
             sendUserPresentBroadcast();
+            synchronized (KeyguardViewMediator.this) {
+                // If system user is provisioned, we might want to lock now to avoid showing launcher
+                if (mustNotUnlockCurrentUser()) {
+                    doKeyguardLocked(null);
+                }
+            }
         }
 
         @Override
@@ -406,7 +435,7 @@ public class KeyguardViewMediator extends SystemUI {
                 case ABSENT:
                     // only force lock screen in case of missing sim if user hasn't
                     // gone through setup wizard
-                    synchronized (this) {
+                    synchronized (KeyguardViewMediator.this) {
                         if (shouldWaitForProvisioning()) {
                             if (!mShowing) {
                                 if (DEBUG_SIM_STATES) Log.d(TAG, "ICC_ABSENT isn't showing,"
@@ -417,11 +446,16 @@ public class KeyguardViewMediator extends SystemUI {
                                 resetStateLocked();
                             }
                         }
+                        if (simState == ABSENT) {
+                            // MVNO SIMs can become transiently NOT_READY when switching networks,
+                            // so we should only lock when they are ABSENT.
+                            onSimAbsentLocked();
+                        }
                     }
                     break;
                 case PIN_REQUIRED:
                 case PUK_REQUIRED:
-                    synchronized (this) {
+                    synchronized (KeyguardViewMediator.this) {
                         if (!mShowing) {
                             if (DEBUG_SIM_STATES) Log.d(TAG,
                                     "INTENT_VALUE_ICC_LOCKED and keygaurd isn't "
@@ -433,7 +467,7 @@ public class KeyguardViewMediator extends SystemUI {
                     }
                     break;
                 case PERM_DISABLED:
-                    synchronized (this) {
+                    synchronized (KeyguardViewMediator.this) {
                         if (!mShowing) {
                             if (DEBUG_SIM_STATES) Log.d(TAG, "PERM_DISABLED and "
                                   + "keygaurd isn't showing.");
@@ -443,28 +477,80 @@ public class KeyguardViewMediator extends SystemUI {
                                   + "show permanently disabled message in lockscreen.");
                             resetStateLocked();
                         }
+                        onSimAbsentLocked();
                     }
                     break;
                 case READY:
-                    synchronized (this) {
+                    synchronized (KeyguardViewMediator.this) {
                         if (mShowing) {
                             resetStateLocked();
                         }
+                        mLockWhenSimRemoved = true;
                     }
                     break;
                 default:
-                    if (DEBUG_SIM_STATES) Log.v(TAG, "Ignoring state: " + simState);
+                    if (DEBUG_SIM_STATES) Log.v(TAG, "Unspecific state: " + simState);
+                    synchronized (KeyguardViewMediator.this) {
+                        onSimAbsentLocked();
+                    }
                     break;
+            }
+        }
+
+        private void onSimAbsentLocked() {
+            if (isSecure() && mLockWhenSimRemoved && !mShuttingDown) {
+                mLockWhenSimRemoved = false;
+                MetricsLogger.action(mContext,
+                        MetricsEvent.ACTION_LOCK_BECAUSE_SIM_REMOVED, mShowing);
+                if (!mShowing) {
+                    Log.i(TAG, "SIM removed, showing keyguard");
+                    doKeyguardLocked(null);
+                }
+            }
+        }
+
+        @Override
+        public void onFingerprintAuthFailed() {
+            final int currentUser = KeyguardUpdateMonitor.getCurrentUser();
+            if (mLockPatternUtils.isSecure(currentUser)) {
+                mLockPatternUtils.getDevicePolicyManager().reportFailedFingerprintAttempt(
+                        currentUser);
+            }
+        }
+
+        @Override
+        public void onFingerprintAuthenticated(int userId) {
+            if (mLockPatternUtils.isSecure(userId)) {
+                mLockPatternUtils.getDevicePolicyManager().reportSuccessfulFingerprintAttempt(
+                        userId);
+            }
+        }
+
+        @Override
+        public void onTrustChanged(int userId) {
+            if (userId == KeyguardUpdateMonitor.getCurrentUser()) {
+                synchronized (KeyguardViewMediator.this) {
+                    notifyTrustedChangedLocked(mUpdateMonitor.getUserHasTrust(userId));
+                }
+            }
+        }
+
+        @Override
+        public void onHasLockscreenWallpaperChanged(boolean hasLockscreenWallpaper) {
+            synchronized (KeyguardViewMediator.this) {
+                notifyHasLockscreenWallpaperChanged(hasLockscreenWallpaper);
             }
         }
     };
 
     ViewMediatorCallback mViewMediatorCallback = new ViewMediatorCallback() {
 
+        @Override
         public void userActivity() {
             KeyguardViewMediator.this.userActivity();
         }
 
+        @Override
         public void keyguardDone(boolean strongAuth) {
             if (!mKeyguardDonePending) {
                 KeyguardViewMediator.this.keyguardDone(true /* authenticated */);
@@ -474,8 +560,11 @@ public class KeyguardViewMediator extends SystemUI {
             }
         }
 
+        @Override
         public void keyguardDoneDrawing() {
+            Trace.beginSection("KeyguardViewMediator.mViewMediatorCallback#keyguardDoneDrawing");
             mHandler.sendEmptyMessage(KEYGUARD_DONE_DRAWING);
+            Trace.endSection();
         }
 
         @Override
@@ -485,6 +574,7 @@ public class KeyguardViewMediator extends SystemUI {
 
         @Override
         public void keyguardDonePending(boolean strongAuth) {
+            Trace.beginSection("KeyguardViewMediator.mViewMediatorCallback#keyguardDonePending");
             mKeyguardDonePending = true;
             mHideAnimationRun = true;
             mStatusBarKeyguardViewManager.startPreHideAnimation(null /* finishRunnable */);
@@ -493,20 +583,25 @@ public class KeyguardViewMediator extends SystemUI {
             if (strongAuth) {
                 mUpdateMonitor.reportSuccessfulStrongAuthUnlockAttempt();
             }
+            Trace.endSection();
         }
 
         @Override
         public void keyguardGone() {
+            Trace.beginSection("KeyguardViewMediator.mViewMediatorCallback#keyguardGone");
             mKeyguardDisplayManager.hide();
+            Trace.endSection();
         }
 
         @Override
         public void readyForKeyguardDone() {
+            Trace.beginSection("KeyguardViewMediator.mViewMediatorCallback#readyForKeyguardDone");
             if (mKeyguardDonePending) {
                 // Somebody has called keyguardDonePending before, which means that we are
                 // authenticated
                 KeyguardViewMediator.this.keyguardDone(true /* authenticated */);
             }
+            Trace.endSection();
         }
 
         @Override
@@ -532,13 +627,23 @@ public class KeyguardViewMediator extends SystemUI {
         @Override
         public int getBouncerPromptReason() {
             int currentUser = ActivityManager.getCurrentUser();
-            if ((mUpdateMonitor.getUserTrustIsManaged(currentUser)
-                    || mUpdateMonitor.isUnlockWithFingerprintPossible(currentUser))
-                    && !mUpdateMonitor.getStrongAuthTracker().hasUserAuthenticatedSinceBoot()) {
+            boolean trust = mTrustManager.isTrustUsuallyManaged(currentUser);
+            boolean fingerprint = mUpdateMonitor.isUnlockWithFingerprintPossible(currentUser);
+            boolean any = trust || fingerprint;
+            KeyguardUpdateMonitor.StrongAuthTracker strongAuthTracker =
+                    mUpdateMonitor.getStrongAuthTracker();
+            int strongAuth = strongAuthTracker.getStrongAuthForUser(currentUser);
+
+            if (any && !strongAuthTracker.hasUserAuthenticatedSinceBoot()) {
                 return KeyguardSecurityView.PROMPT_REASON_RESTART;
-            } else if (mUpdateMonitor.isUnlockWithFingerprintPossible(currentUser)
-                    && mUpdateMonitor.hasFingerprintUnlockTimedOut(currentUser)) {
+            } else if (fingerprint && mUpdateMonitor.hasFingerprintUnlockTimedOut(currentUser)) {
                 return KeyguardSecurityView.PROMPT_REASON_TIMEOUT;
+            } else if (any && (strongAuth & STRONG_AUTH_REQUIRED_AFTER_DPM_LOCK_NOW) != 0) {
+                return KeyguardSecurityView.PROMPT_REASON_DEVICE_ADMIN;
+            } else if (trust && (strongAuth & SOME_AUTH_REQUIRED_AFTER_USER_REQUEST) != 0) {
+                return KeyguardSecurityView.PROMPT_REASON_USER_REQUEST;
+            } else if (any && (strongAuth & STRONG_AUTH_REQUIRED_AFTER_LOCKOUT) != 0) {
+                return KeyguardSecurityView.PROMPT_REASON_AFTER_LOCKOUT;
             }
             return KeyguardSecurityView.PROMPT_REASON_NONE;
         }
@@ -546,6 +651,11 @@ public class KeyguardViewMediator extends SystemUI {
 
     public void userActivity() {
         mPM.userActivity(SystemClock.uptimeMillis(), false);
+    }
+
+    boolean mustNotUnlockCurrentUser() {
+        return (UserManager.isSplitSystemUser() || UserManager.isDeviceInDemoMode(mContext))
+                && KeyguardUpdateMonitor.getCurrentUser() == UserHandle.USER_SYSTEM;
     }
 
     private void setupLocked() {
@@ -556,7 +666,11 @@ public class KeyguardViewMediator extends SystemUI {
         mShowKeyguardWakeLock = mPM.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "show keyguard");
         mShowKeyguardWakeLock.setReferenceCounted(false);
 
-        mContext.registerReceiver(mBroadcastReceiver, new IntentFilter(DELAYED_KEYGUARD_ACTION));
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(DELAYED_KEYGUARD_ACTION);
+        filter.addAction(DELAYED_LOCK_PROFILE_ACTION);
+        filter.addAction(Intent.ACTION_SHUTDOWN);
+        mContext.registerReceiver(mBroadcastReceiver, filter);
 
         mKeyguardDisplayManager = new KeyguardDisplayManager(mContext);
 
@@ -573,8 +687,9 @@ public class KeyguardViewMediator extends SystemUI {
         updateInputRestrictedLocked();
         mTrustManager.reportKeyguardShowingChanged();
 
-        mStatusBarKeyguardViewManager = new StatusBarKeyguardViewManager(mContext,
-                mViewMediatorCallback, mLockPatternUtils);
+        mStatusBarKeyguardViewManager =
+                SystemUIFactory.getInstance().createStatusBarKeyguardViewManager(mContext,
+                        mViewMediatorCallback, mLockPatternUtils);
         final ContentResolver cr = mContext.getContentResolver();
 
         mDeviceInteractive = mPM.isInteractive();
@@ -629,6 +744,7 @@ public class KeyguardViewMediator extends SystemUI {
             doKeyguardLocked(null);
             mUpdateMonitor.registerCallback(mUpdateCallback);
         }
+        mIsPerUserLock = StorageManager.isFileEncryptedNativeOrEmulated();
         // Most services aren't available until the system reaches the ready state, so we
         // send it here when the device first boots.
         maybeSendUserPresentBroadcast();
@@ -652,8 +768,8 @@ public class KeyguardViewMediator extends SystemUI {
             final boolean lockImmediately =
                     mLockPatternUtils.getPowerButtonInstantlyLocks(currentUser)
                             || !mLockPatternUtils.isSecure(currentUser);
-            long timeout = getLockTimeout();
-
+            long timeout = getLockTimeout(KeyguardUpdateMonitor.getCurrentUser());
+            mLockLater = false;
             if (mExitSecureCallback != null) {
                 if (DEBUG) Log.d(TAG, "pending exit secure callback cancelled");
                 try {
@@ -670,6 +786,7 @@ public class KeyguardViewMediator extends SystemUI {
             } else if ((why == WindowManagerPolicy.OFF_BECAUSE_OF_TIMEOUT && timeout > 0)
                     || (why == WindowManagerPolicy.OFF_BECAUSE_OF_USER && !lockImmediately)) {
                 doKeyguardLaterLocked(timeout);
+                mLockLater = true;
             } else if (!mLockPatternUtils.isLockScreenDisabled(currentUser)) {
                 mPendingLock = true;
             }
@@ -682,7 +799,7 @@ public class KeyguardViewMediator extends SystemUI {
         notifyStartedGoingToSleep();
     }
 
-    public void onFinishedGoingToSleep(int why) {
+    public void onFinishedGoingToSleep(int why, boolean cameraGestureTriggered) {
         if (DEBUG) Log.d(TAG, "onFinishedGoingToSleep(" + why + ")");
         synchronized (this) {
             mDeviceInteractive = false;
@@ -693,29 +810,44 @@ public class KeyguardViewMediator extends SystemUI {
 
             notifyFinishedGoingToSleep();
 
+            if (cameraGestureTriggered) {
+                Log.i(TAG, "Camera gesture was triggered, preventing Keyguard locking.");
+
+                // Just to make sure, make sure the device is awake.
+                mContext.getSystemService(PowerManager.class).wakeUp(SystemClock.uptimeMillis(),
+                        "com.android.systemui:CAMERA_GESTURE_PREVENT_LOCK");
+                mPendingLock = false;
+                mPendingReset = false;
+            }
+
             if (mPendingReset) {
                 resetStateLocked();
                 mPendingReset = false;
             }
+
             if (mPendingLock) {
                 doKeyguardLocked(null);
                 mPendingLock = false;
             }
+
+            // We do not have timeout and power button instant lock setting for profile lock.
+            // So we use the personal setting if there is any. But if there is no device
+            // we need to make sure we lock it immediately when the screen is off.
+            if (!mLockLater && !cameraGestureTriggered) {
+                doKeyguardForChildProfilesLocked();
+            }
+
         }
         KeyguardUpdateMonitor.getInstance(mContext).dispatchFinishedGoingToSleep(why);
     }
 
-    private long getLockTimeout() {
+    private long getLockTimeout(int userId) {
         // if the screen turned off because of timeout or the user hit the power button
         // and we don't need to lock immediately, set an alarm
         // to enable it a little bit later (i.e, give the user a chance
         // to turn the screen back on within a certain window without
         // having to unlock the screen)
         final ContentResolver cr = mContext.getContentResolver();
-
-        // From DisplaySettings
-        long displayTimeout = Settings.System.getInt(cr, SCREEN_OFF_TIMEOUT,
-                KEYGUARD_DISPLAY_TIMEOUT_DELAY_DEFAULT);
 
         // From SecuritySettings
         final long lockAfterTimeout = Settings.Secure.getInt(cr,
@@ -724,21 +856,27 @@ public class KeyguardViewMediator extends SystemUI {
 
         // From DevicePolicyAdmin
         final long policyTimeout = mLockPatternUtils.getDevicePolicyManager()
-                .getMaximumTimeToLock(null, KeyguardUpdateMonitor.getCurrentUser());
+                .getMaximumTimeToLockForUserAndProfiles(userId);
 
         long timeout;
-        if (policyTimeout > 0) {
+
+        if (policyTimeout <= 0) {
+            timeout = lockAfterTimeout;
+        } else {
+            // From DisplaySettings
+            long displayTimeout = Settings.System.getInt(cr, SCREEN_OFF_TIMEOUT,
+                    KEYGUARD_DISPLAY_TIMEOUT_DELAY_DEFAULT);
+
             // policy in effect. Make sure we don't go beyond policy limit.
             displayTimeout = Math.max(displayTimeout, 0); // ignore negative values
             timeout = Math.min(policyTimeout - displayTimeout, lockAfterTimeout);
-        } else {
-            timeout = lockAfterTimeout;
+            timeout = Math.max(timeout, 0);
         }
         return timeout;
     }
 
     private void doKeyguardLaterLocked() {
-        long timeout = getLockTimeout();
+        long timeout = getLockTimeout(KeyguardUpdateMonitor.getCurrentUser());
         if (timeout == 0) {
             doKeyguardLocked(null);
         } else {
@@ -751,40 +889,84 @@ public class KeyguardViewMediator extends SystemUI {
         long when = SystemClock.elapsedRealtime() + timeout;
         Intent intent = new Intent(DELAYED_KEYGUARD_ACTION);
         intent.putExtra("seq", mDelayedShowingSequence);
+        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
         PendingIntent sender = PendingIntent.getBroadcast(mContext,
                 0, intent, PendingIntent.FLAG_CANCEL_CURRENT);
-        mAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, when, sender);
+        mAlarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, when, sender);
         if (DEBUG) Log.d(TAG, "setting alarm to turn off keyguard, seq = "
                          + mDelayedShowingSequence);
+        doKeyguardLaterForChildProfilesLocked();
+    }
+
+    private void doKeyguardLaterForChildProfilesLocked() {
+        UserManager um = UserManager.get(mContext);
+        for (int profileId : um.getEnabledProfileIds(UserHandle.myUserId())) {
+            if (mLockPatternUtils.isSeparateProfileChallengeEnabled(profileId)) {
+                long userTimeout = getLockTimeout(profileId);
+                if (userTimeout == 0) {
+                    doKeyguardForChildProfilesLocked();
+                } else {
+                    long userWhen = SystemClock.elapsedRealtime() + userTimeout;
+                    Intent lockIntent = new Intent(DELAYED_LOCK_PROFILE_ACTION);
+                    lockIntent.putExtra("seq", mDelayedProfileShowingSequence);
+                    lockIntent.putExtra(Intent.EXTRA_USER_ID, profileId);
+                    lockIntent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
+                    PendingIntent lockSender = PendingIntent.getBroadcast(
+                            mContext, 0, lockIntent, PendingIntent.FLAG_CANCEL_CURRENT);
+                    mAlarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                            userWhen, lockSender);
+                }
+            }
+        }
+    }
+
+    private void doKeyguardForChildProfilesLocked() {
+        UserManager um = UserManager.get(mContext);
+        for (int profileId : um.getEnabledProfileIds(UserHandle.myUserId())) {
+            if (mLockPatternUtils.isSeparateProfileChallengeEnabled(profileId)) {
+                lockProfile(profileId);
+            }
+        }
     }
 
     private void cancelDoKeyguardLaterLocked() {
         mDelayedShowingSequence++;
     }
 
+    private void cancelDoKeyguardForChildProfilesLocked() {
+        mDelayedProfileShowingSequence++;
+    }
+
     /**
      * Let's us know when the device is waking up.
      */
     public void onStartedWakingUp() {
+        Trace.beginSection("KeyguardViewMediator#onStartedWakingUp");
 
         // TODO: Rename all screen off/on references to interactive/sleeping
         synchronized (this) {
             mDeviceInteractive = true;
             cancelDoKeyguardLaterLocked();
+            cancelDoKeyguardForChildProfilesLocked();
             if (DEBUG) Log.d(TAG, "onStartedWakingUp, seq = " + mDelayedShowingSequence);
             notifyStartedWakingUp();
         }
         KeyguardUpdateMonitor.getInstance(mContext).dispatchStartedWakingUp();
         maybeSendUserPresentBroadcast();
+        Trace.endSection();
     }
 
     public void onScreenTurningOn(IKeyguardDrawnCallback callback) {
+        Trace.beginSection("KeyguardViewMediator#onScreenTurningOn");
         notifyScreenOn(callback);
+        Trace.endSection();
     }
 
     public void onScreenTurnedOn() {
+        Trace.beginSection("KeyguardViewMediator#onScreenTurnedOn");
         notifyScreenTurnedOn();
         mUpdateMonitor.dispatchScreenTurnedOn();
+        Trace.endSection();
     }
 
     public void onScreenTurnedOff() {
@@ -799,6 +981,11 @@ public class KeyguardViewMediator extends SystemUI {
             // In this case, send out ACTION_USER_PRESENT here instead of in
             // handleKeyguardDone()
             sendUserPresentBroadcast();
+        } else if (mSystemReady && shouldWaitForProvisioning()) {
+            // Skipping the lockscreen because we're not yet provisioned, but we still need to
+            // notify the StrongAuthTracker that it's now safe to run trust agents, in case the
+            // user sets a credential later.
+            getLockPatternUtils().userPresent(KeyguardUpdateMonitor.getCurrentUser());
         }
     }
 
@@ -807,6 +994,7 @@ public class KeyguardViewMediator extends SystemUI {
      * if there is a secure lock pattern.
      */
     public void onDreamingStarted() {
+        KeyguardUpdateMonitor.getInstance(mContext).dispatchDreamingStarted();
         synchronized (this) {
             if (mDeviceInteractive
                     && mLockPatternUtils.isSecure(KeyguardUpdateMonitor.getCurrentUser())) {
@@ -819,6 +1007,7 @@ public class KeyguardViewMediator extends SystemUI {
      * A dream stopped.
      */
     public void onDreamingStopped() {
+        KeyguardUpdateMonitor.getInstance(mContext).dispatchDreamingStopped();
         synchronized (this) {
             if (mDeviceInteractive) {
                 cancelDoKeyguardLaterLocked();
@@ -893,6 +1082,7 @@ public class KeyguardViewMediator extends SystemUI {
      * @see android.app.KeyguardManager#exitKeyguardSecurely
      */
     public void verifyUnlock(IKeyguardExitCallback callback) {
+        Trace.beginSection("KeyguardViewMediator#verifyUnlock");
         synchronized (this) {
             if (DEBUG) Log.d(TAG, "verifyUnlock");
             if (shouldWaitForProvisioning()) {
@@ -943,6 +1133,7 @@ public class KeyguardViewMediator extends SystemUI {
                 }
             }
         }
+        Trace.endSection();
     }
 
     /**
@@ -955,17 +1146,20 @@ public class KeyguardViewMediator extends SystemUI {
     /**
      * Notify us when the keyguard is occluded by another window
      */
-    public void setOccluded(boolean isOccluded) {
+    public void setOccluded(boolean isOccluded, boolean animate) {
+        Trace.beginSection("KeyguardViewMediator#setOccluded");
         if (DEBUG) Log.d(TAG, "setOccluded " + isOccluded);
         mHandler.removeMessages(SET_OCCLUDED);
-        Message msg = mHandler.obtainMessage(SET_OCCLUDED, (isOccluded ? 1 : 0), 0);
+        Message msg = mHandler.obtainMessage(SET_OCCLUDED, isOccluded ? 1 : 0, animate ? 1 : 0);
         mHandler.sendMessage(msg);
+        Trace.endSection();
     }
 
     /**
      * Handles SET_OCCLUDED message sent by setOccluded()
      */
-    private void handleSetOccluded(boolean isOccluded) {
+    private void handleSetOccluded(boolean isOccluded, boolean animate) {
+        Trace.beginSection("KeyguardViewMediator#handleSetOccluded");
         synchronized (KeyguardViewMediator.this) {
             if (mHiding && isOccluded) {
                 // We're in the process of going away but WindowManager wants to show a
@@ -975,11 +1169,12 @@ public class KeyguardViewMediator extends SystemUI {
 
             if (mOccluded != isOccluded) {
                 mOccluded = isOccluded;
-                mStatusBarKeyguardViewManager.setOccluded(isOccluded);
+                mStatusBarKeyguardViewManager.setOccluded(isOccluded, animate);
                 updateActivityLockScreenState();
                 adjustStatusBarLocked();
             }
         }
+        Trace.endSection();
     }
 
     /**
@@ -1051,38 +1246,47 @@ public class KeyguardViewMediator extends SystemUI {
             return;
         }
 
-        // if the setup wizard hasn't run yet, don't show
-        final boolean requireSim = !SystemProperties.getBoolean("keyguard.no_require_sim", false);
-        final boolean absent = SubscriptionManager.isValidSubscriptionId(
-                mUpdateMonitor.getNextSubIdForState(IccCardConstants.State.ABSENT));
-        final boolean disabled = SubscriptionManager.isValidSubscriptionId(
-                mUpdateMonitor.getNextSubIdForState(IccCardConstants.State.PERM_DISABLED));
-        final boolean lockedOrMissing = mUpdateMonitor.isSimPinSecure()
-                || ((absent || disabled) && requireSim);
+        // In split system user mode, we never unlock system user.
+        if (!mustNotUnlockCurrentUser()
+                || !mUpdateMonitor.isDeviceProvisioned()) {
 
-        if (!lockedOrMissing && shouldWaitForProvisioning()) {
-            if (DEBUG) Log.d(TAG, "doKeyguard: not showing because device isn't provisioned"
-                    + " and the sim is not locked or missing");
-            return;
-        }
+            // if the setup wizard hasn't run yet, don't show
+            final boolean requireSim = !SystemProperties.getBoolean("keyguard.no_require_sim", false);
+            final boolean absent = SubscriptionManager.isValidSubscriptionId(
+                    mUpdateMonitor.getNextSubIdForState(ABSENT));
+            final boolean disabled = SubscriptionManager.isValidSubscriptionId(
+                    mUpdateMonitor.getNextSubIdForState(IccCardConstants.State.PERM_DISABLED));
+            final boolean lockedOrMissing = mUpdateMonitor.isSimPinSecure()
+                    || ((absent || disabled) && requireSim);
 
-        if (mLockPatternUtils.isLockScreenDisabled(KeyguardUpdateMonitor.getCurrentUser())
-                && !lockedOrMissing) {
-            if (DEBUG) Log.d(TAG, "doKeyguard: not showing because lockscreen is off");
-            return;
-        }
+            if (!lockedOrMissing && shouldWaitForProvisioning()) {
+                if (DEBUG) Log.d(TAG, "doKeyguard: not showing because device isn't provisioned"
+                        + " and the sim is not locked or missing");
+                return;
+            }
 
-        if (mLockPatternUtils.checkVoldPassword(KeyguardUpdateMonitor.getCurrentUser())) {
-            if (DEBUG) Log.d(TAG, "Not showing lock screen since just decrypted");
-            // Without this, settings is not enabled until the lock screen first appears
-            setShowingLocked(false);
-            hideLocked();
-            mUpdateMonitor.reportSuccessfulStrongAuthUnlockAttempt();
-            return;
+            if (mLockPatternUtils.isLockScreenDisabled(KeyguardUpdateMonitor.getCurrentUser())
+                    && !lockedOrMissing) {
+                if (DEBUG) Log.d(TAG, "doKeyguard: not showing because lockscreen is off");
+                return;
+            }
+
+            if (mLockPatternUtils.checkVoldPassword(KeyguardUpdateMonitor.getCurrentUser())) {
+                if (DEBUG) Log.d(TAG, "Not showing lock screen since just decrypted");
+                // Without this, settings is not enabled until the lock screen first appears
+                setShowingLocked(false);
+                hideLocked();
+                mUpdateMonitor.reportSuccessfulStrongAuthUnlockAttempt();
+                return;
+            }
         }
 
         if (DEBUG) Log.d(TAG, "doKeyguard: showing the lock screen");
         showLocked(options);
+    }
+
+    private void lockProfile(int userId) {
+        mTrustManager.setDeviceLockedForUser(userId, true);
     }
 
     private boolean shouldWaitForProvisioning() {
@@ -1091,15 +1295,16 @@ public class KeyguardViewMediator extends SystemUI {
 
     /**
      * Dismiss the keyguard through the security layers.
+     * @param allowWhileOccluded if true, dismiss the keyguard even if it's currently occluded.
      */
-    public void handleDismiss() {
-        if (mShowing && !mOccluded) {
+    public void handleDismiss(boolean allowWhileOccluded) {
+        if (mShowing && (allowWhileOccluded || !mOccluded)) {
             mStatusBarKeyguardViewManager.dismiss();
         }
     }
 
-    public void dismiss() {
-        mHandler.sendEmptyMessage(DISMISS);
+    public void dismiss(boolean allowWhileOccluded) {
+        mHandler.obtainMessage(DISMISS, allowWhileOccluded ? 1 : 0, 0).sendToTarget();
     }
 
     /**
@@ -1159,11 +1364,13 @@ public class KeyguardViewMediator extends SystemUI {
      * @see #handleShow
      */
     private void showLocked(Bundle options) {
+        Trace.beginSection("KeyguardViewMediator#showLocked aqcuiring mShowKeyguardWakeLock");
         if (DEBUG) Log.d(TAG, "showLocked");
         // ensure we stay awake until we are finished displaying the keyguard
         mShowKeyguardWakeLock.acquire();
         Message msg = mHandler.obtainMessage(SHOW, options);
         mHandler.sendMessage(msg);
+        Trace.endSection();
     }
 
     /**
@@ -1171,9 +1378,11 @@ public class KeyguardViewMediator extends SystemUI {
      * @see #handleHide()
      */
     private void hideLocked() {
+        Trace.beginSection("KeyguardViewMediator#hideLocked");
         if (DEBUG) Log.d(TAG, "hideLocked");
         Message msg = mHandler.obtainMessage(HIDE);
         mHandler.sendMessage(msg);
+        Trace.endSection();
     }
 
     public boolean isSecure() {
@@ -1189,6 +1398,9 @@ public class KeyguardViewMediator extends SystemUI {
      */
     public void setCurrentUser(int newUserId) {
         KeyguardUpdateMonitor.setCurrentUser(newUserId);
+        synchronized (this) {
+            notifyTrustedChangedLocked(mUpdateMonitor.getUserHasTrust(newUserId));
+        }
     }
 
     private final BroadcastReceiver mBroadcastReceiver = new BroadcastReceiver() {
@@ -1203,15 +1415,32 @@ public class KeyguardViewMediator extends SystemUI {
                         doKeyguardLocked(null);
                     }
                 }
+            } else if (DELAYED_LOCK_PROFILE_ACTION.equals(intent.getAction())) {
+                final int sequence = intent.getIntExtra("seq", 0);
+                int userId = intent.getIntExtra(Intent.EXTRA_USER_ID, 0);
+                if (userId != 0) {
+                    synchronized (KeyguardViewMediator.this) {
+                        if (mDelayedProfileShowingSequence == sequence) {
+                            lockProfile(userId);
+                        }
+                    }
+                }
+            } else if (Intent.ACTION_SHUTDOWN.equals(intent.getAction())) {
+                synchronized (KeyguardViewMediator.this){
+                    mShuttingDown = true;
+                }
             }
         }
     };
 
     public void keyguardDone(boolean authenticated) {
+        Trace.beginSection("KeyguardViewMediator#keyguardDone");
         if (DEBUG) Log.d(TAG, "keyguardDone(" + authenticated +")");
+        userActivity();
         EventLog.writeEvent(70000, 2);
         Message msg = mHandler.obtainMessage(KEYGUARD_DONE, authenticated ? 1 : 0);
         mHandler.sendMessage(msg);
+        Trace.endSection();
     }
 
     /**
@@ -1235,7 +1464,9 @@ public class KeyguardViewMediator extends SystemUI {
                     handleReset();
                     break;
                 case VERIFY_UNLOCK:
+                    Trace.beginSection("KeyguardViewMediator#handleMessage VERIFY_UNLOCK");
                     handleVerifyUnlock();
+                    Trace.endSection();
                     break;
                 case NOTIFY_STARTED_GOING_TO_SLEEP:
                     handleNotifyStartedGoingToSleep();
@@ -1244,25 +1475,37 @@ public class KeyguardViewMediator extends SystemUI {
                     handleNotifyFinishedGoingToSleep();
                     break;
                 case NOTIFY_SCREEN_TURNING_ON:
+                    Trace.beginSection("KeyguardViewMediator#handleMessage NOTIFY_SCREEN_TURNING_ON");
                     handleNotifyScreenTurningOn((IKeyguardDrawnCallback) msg.obj);
+                    Trace.endSection();
                     break;
                 case NOTIFY_SCREEN_TURNED_ON:
+                    Trace.beginSection("KeyguardViewMediator#handleMessage NOTIFY_SCREEN_TURNED_ON");
                     handleNotifyScreenTurnedOn();
+                    Trace.endSection();
                     break;
                 case NOTIFY_SCREEN_TURNED_OFF:
                     handleNotifyScreenTurnedOff();
                     break;
                 case NOTIFY_STARTED_WAKING_UP:
+                    Trace.beginSection("KeyguardViewMediator#handleMessage NOTIFY_STARTED_WAKING_UP");
                     handleNotifyStartedWakingUp();
+                    Trace.endSection();
                     break;
                 case KEYGUARD_DONE:
+                    Trace.beginSection("KeyguardViewMediator#handleMessage KEYGUARD_DONE");
                     handleKeyguardDone(msg.arg1 != 0);
+                    Trace.endSection();
                     break;
                 case KEYGUARD_DONE_DRAWING:
+                    Trace.beginSection("KeyguardViewMediator#handleMessage KEYGUARD_DONE_DRAWING");
                     handleKeyguardDoneDrawing();
+                    Trace.endSection();
                     break;
                 case SET_OCCLUDED:
-                    handleSetOccluded(msg.arg1 != 0);
+                    Trace.beginSection("KeyguardViewMediator#handleMessage SET_OCCLUDED");
+                    handleSetOccluded(msg.arg1 != 0, msg.arg2 != 0);
+                    Trace.endSection();
                     break;
                 case KEYGUARD_TIMEOUT:
                     synchronized (KeyguardViewMediator.this) {
@@ -1270,14 +1513,19 @@ public class KeyguardViewMediator extends SystemUI {
                     }
                     break;
                 case DISMISS:
-                    handleDismiss();
+                    handleDismiss(msg.arg1 == 1 ? true : false /* allowWhileOccluded */);
                     break;
                 case START_KEYGUARD_EXIT_ANIM:
+                    Trace.beginSection("KeyguardViewMediator#handleMessage START_KEYGUARD_EXIT_ANIM");
                     StartKeyguardExitAnimParams params = (StartKeyguardExitAnimParams) msg.obj;
                     handleStartKeyguardExitAnimation(params.startTime, params.fadeoutDuration);
+                    FalsingManager.getInstance(mContext).onSucccessfulUnlock();
+                    Trace.endSection();
                     break;
                 case KEYGUARD_DONE_PENDING_TIMEOUT:
+                    Trace.beginSection("KeyguardViewMediator#handleMessage KEYGUARD_DONE_PENDING_TIMEOUT");
                     Log.w(TAG, "Timeout while waiting for activity drawn!");
+                    Trace.endSection();
                     // Fall through.
                 case ON_ACTIVITY_DRAWN:
                     handleOnActivityDrawn();
@@ -1291,6 +1539,11 @@ public class KeyguardViewMediator extends SystemUI {
      * @see #KEYGUARD_DONE
      */
     private void handleKeyguardDone(boolean authenticated) {
+        Trace.beginSection("KeyguardViewMediator#handleKeyguardDone");
+        final int currentUser = KeyguardUpdateMonitor.getCurrentUser();
+        if (mLockPatternUtils.isSecure(currentUser)) {
+            mLockPatternUtils.getDevicePolicyManager().reportKeyguardDismissed(currentUser);
+        }
         if (DEBUG) Log.d(TAG, "handleKeyguardDone");
         synchronized (this) {
             resetKeyguardDonePendingLocked();
@@ -1324,18 +1577,20 @@ public class KeyguardViewMediator extends SystemUI {
         }
 
         handleHide();
+        Trace.endSection();
     }
 
     private void sendUserPresentBroadcast() {
         synchronized (this) {
             if (mBootCompleted) {
-                final UserHandle currentUser = new UserHandle(KeyguardUpdateMonitor.getCurrentUser());
+                int currentUserId = KeyguardUpdateMonitor.getCurrentUser();
+                final UserHandle currentUser = new UserHandle(currentUserId);
                 final UserManager um = (UserManager) mContext.getSystemService(
                         Context.USER_SERVICE);
-                List <UserInfo> userHandles = um.getProfiles(currentUser.getIdentifier());
-                for (UserInfo ui : userHandles) {
-                    mContext.sendBroadcastAsUser(USER_PRESENT_INTENT, ui.getUserHandle());
+                for (int profileId : um.getProfileIdsWithDisabled(currentUser.getIdentifier())) {
+                    mContext.sendBroadcastAsUser(USER_PRESENT_INTENT, UserHandle.of(profileId));
                 }
+                getLockPatternUtils().userPresent(currentUserId);
             } else {
                 mBootSendUserPresent = true;
             }
@@ -1347,6 +1602,7 @@ public class KeyguardViewMediator extends SystemUI {
      * @see #KEYGUARD_DONE_DRAWING
      */
     private void handleKeyguardDoneDrawing() {
+        Trace.beginSection("KeyguardViewMediator#handleKeyguardDoneDrawing");
         synchronized(this) {
             if (DEBUG) Log.d(TAG, "handleKeyguardDoneDrawing");
             if (mWaitingUntilKeyguardVisible) {
@@ -1360,6 +1616,7 @@ public class KeyguardViewMediator extends SystemUI {
                 mHandler.removeMessages(KEYGUARD_DONE_DRAWING);
             }
         }
+        Trace.endSection();
     }
 
     private void playSounds(boolean locked) {
@@ -1391,10 +1648,12 @@ public class KeyguardViewMediator extends SystemUI {
     }
 
     private void updateActivityLockScreenState() {
+        Trace.beginSection("KeyguardViewMediator#updateActivityLockScreenState");
         try {
-            ActivityManagerNative.getDefault().setLockScreenShown(mShowing && !mOccluded);
+            ActivityManagerNative.getDefault().setLockScreenShown(mShowing, mOccluded);
         } catch (RemoteException e) {
         }
+        Trace.endSection();
     }
 
     /**
@@ -1402,6 +1661,11 @@ public class KeyguardViewMediator extends SystemUI {
      * @see #SHOW
      */
     private void handleShow(Bundle options) {
+        Trace.beginSection("KeyguardViewMediator#handleShow");
+        final int currentUser = KeyguardUpdateMonitor.getCurrentUser();
+        if (mLockPatternUtils.isSecure(currentUser)) {
+            mLockPatternUtils.getDevicePolicyManager().reportKeyguardSecured(currentUser);
+        }
         synchronized (KeyguardViewMediator.this) {
             if (!mSystemReady) {
                 if (DEBUG) Log.d(TAG, "ignoring handleShow because system is not ready.");
@@ -1423,24 +1687,37 @@ public class KeyguardViewMediator extends SystemUI {
             mShowKeyguardWakeLock.release();
         }
         mKeyguardDisplayManager.show();
+        Trace.endSection();
     }
 
     private final Runnable mKeyguardGoingAwayRunnable = new Runnable() {
         @Override
         public void run() {
+            Trace.beginSection("KeyguardViewMediator.mKeyGuardGoingAwayRunnable");
+            if (DEBUG) Log.d(TAG, "keyguardGoingAway");
             try {
                 mStatusBarKeyguardViewManager.keyguardGoingAway();
+
+                int flags = 0;
+                if (mStatusBarKeyguardViewManager.shouldDisableWindowAnimationsForUnlock()
+                        || mWakeAndUnlocking) {
+                    flags |= WindowManagerPolicy.KEYGUARD_GOING_AWAY_FLAG_NO_WINDOW_ANIMATIONS;
+                }
+                if (mStatusBarKeyguardViewManager.isGoingToNotificationShade()) {
+                    flags |= WindowManagerPolicy.KEYGUARD_GOING_AWAY_FLAG_TO_SHADE;
+                }
+                if (mStatusBarKeyguardViewManager.isUnlockWithWallpaper()) {
+                    flags |= WindowManagerPolicy.KEYGUARD_GOING_AWAY_FLAG_WITH_WALLPAPER;
+                }
 
                 // Don't actually hide the Keyguard at the moment, wait for window
                 // manager until it tells us it's safe to do so with
                 // startKeyguardExitAnimation.
-                ActivityManagerNative.getDefault().keyguardGoingAway(
-                        mStatusBarKeyguardViewManager.shouldDisableWindowAnimationsForUnlock()
-                                || mWakeAndUnlocking,
-                        mStatusBarKeyguardViewManager.isGoingToNotificationShade());
+                ActivityManagerNative.getDefault().keyguardGoingAway(flags);
             } catch (RemoteException e) {
                 Log.e(TAG, "Error while calling WindowManager", e);
             }
+            Trace.endSection();
         }
     };
 
@@ -1449,9 +1726,18 @@ public class KeyguardViewMediator extends SystemUI {
      * @see #HIDE
      */
     private void handleHide() {
+        Trace.beginSection("KeyguardViewMediator#handleHide");
         synchronized (KeyguardViewMediator.this) {
             if (DEBUG) Log.d(TAG, "handleHide");
 
+            if (mustNotUnlockCurrentUser()) {
+                // In split system user mode, we never unlock system user. The end user has to
+                // switch to another user.
+                // TODO: We should stop it early by disabling the swipe up flow. Right now swipe up
+                // still completes and makes the screen blank.
+                if (DEBUG) Log.d(TAG, "Split system user, quit unlocking.");
+                return;
+            }
             mHiding = true;
             if (mShowing && !mOccluded) {
                 if (!mHideAnimationRun) {
@@ -1468,6 +1754,7 @@ public class KeyguardViewMediator extends SystemUI {
                         mHideAnimation.getDuration());
             }
         }
+        Trace.endSection();
     }
 
     private void handleOnActivityDrawn() {
@@ -1478,6 +1765,9 @@ public class KeyguardViewMediator extends SystemUI {
     }
 
     private void handleStartKeyguardExitAnimation(long startTime, long fadeoutDuration) {
+        Trace.beginSection("KeyguardViewMediator#handleStartKeyguardExitAnimation");
+        if (DEBUG) Log.d(TAG, "handleStartKeyguardExitAnimation startTime=" + startTime
+                + " fadeoutDuration=" + fadeoutDuration);
         synchronized (KeyguardViewMediator.this) {
 
             if (!mHiding) {
@@ -1492,6 +1782,7 @@ public class KeyguardViewMediator extends SystemUI {
                 // this to our ViewRootImpl.
                 mStatusBarKeyguardViewManager.getViewRootImpl().setReportNextDraw();
                 notifyDrawn(mDrawnCallback);
+                mDrawnCallback = null;
             }
 
             // only play "unlock" noises if not on a call (since the incall UI
@@ -1500,6 +1791,7 @@ public class KeyguardViewMediator extends SystemUI {
                 playSounds(false);
             }
 
+            mWakeAndUnlocking = false;
             setShowingLocked(false);
             mStatusBarKeyguardViewManager.hide(startTime, fadeoutDuration);
             resetKeyguardDonePendingLocked();
@@ -1508,6 +1800,7 @@ public class KeyguardViewMediator extends SystemUI {
             adjustStatusBarLocked();
             sendUserPresentBroadcast();
         }
+        Trace.endSection();
     }
 
     private void adjustStatusBarLocked() {
@@ -1559,12 +1852,14 @@ public class KeyguardViewMediator extends SystemUI {
      * @see #VERIFY_UNLOCK
      */
     private void handleVerifyUnlock() {
+        Trace.beginSection("KeyguardViewMediator#handleVerifyUnlock");
         synchronized (KeyguardViewMediator.this) {
             if (DEBUG) Log.d(TAG, "handleVerifyUnlock");
             setShowingLocked(true);
             mStatusBarKeyguardViewManager.verifyUnlock();
             updateActivityLockScreenState();
         }
+        Trace.endSection();
     }
 
     private void handleNotifyStartedGoingToSleep() {
@@ -1586,13 +1881,16 @@ public class KeyguardViewMediator extends SystemUI {
     }
 
     private void handleNotifyStartedWakingUp() {
+        Trace.beginSection("KeyguardViewMediator#handleMotifyStartedWakingUp");
         synchronized (KeyguardViewMediator.this) {
             if (DEBUG) Log.d(TAG, "handleNotifyWakingUp");
             mStatusBarKeyguardViewManager.onStartedWakingUp();
         }
+        Trace.endSection();
     }
 
     private void handleNotifyScreenTurningOn(IKeyguardDrawnCallback callback) {
+        Trace.beginSection("KeyguardViewMediator#handleNotifyScreenTurningOn");
         synchronized (KeyguardViewMediator.this) {
             if (DEBUG) Log.d(TAG, "handleNotifyScreenTurningOn");
             mStatusBarKeyguardViewManager.onScreenTurningOn();
@@ -1604,29 +1902,35 @@ public class KeyguardViewMediator extends SystemUI {
                 }
             }
         }
+        Trace.endSection();
     }
 
     private void handleNotifyScreenTurnedOn() {
+        Trace.beginSection("KeyguardViewMediator#handleNotifyScreenTurnedOn");
         synchronized (this) {
             if (DEBUG) Log.d(TAG, "handleNotifyScreenTurnedOn");
             mStatusBarKeyguardViewManager.onScreenTurnedOn();
         }
+        Trace.endSection();
     }
 
     private void handleNotifyScreenTurnedOff() {
         synchronized (this) {
             if (DEBUG) Log.d(TAG, "handleNotifyScreenTurnedOff");
             mStatusBarKeyguardViewManager.onScreenTurnedOff();
+            mDrawnCallback = null;
             mWakeAndUnlocking = false;
         }
     }
 
     private void notifyDrawn(final IKeyguardDrawnCallback callback) {
+        Trace.beginSection("KeyguardViewMediator#notifyDrawn");
         try {
             callback.onDrawn();
         } catch (RemoteException e) {
             Slog.w(TAG, "Exception calling onDrawn():", e);
         }
+        Trace.endSection();
     }
 
     private void resetKeyguardDonePendingLocked() {
@@ -1634,6 +1938,7 @@ public class KeyguardViewMediator extends SystemUI {
         mHandler.removeMessages(KEYGUARD_DONE_PENDING_TIMEOUT);
     }
 
+    @Override
     public void onBootCompleted() {
         mUpdateMonitor.dispatchBootCompleted();
         synchronized (this) {
@@ -1645,8 +1950,10 @@ public class KeyguardViewMediator extends SystemUI {
     }
 
     public void onWakeAndUnlocking() {
+        Trace.beginSection("KeyguardViewMediator#onWakeAndUnlocking");
         mWakeAndUnlocking = true;
         keyguardDone(true /* authenticated */);
+        Trace.endSection();
     }
 
     public StatusBarKeyguardViewManager registerStatusBar(PhoneStatusBar phoneStatusBar,
@@ -1659,16 +1966,23 @@ public class KeyguardViewMediator extends SystemUI {
     }
 
     public void startKeyguardExitAnimation(long startTime, long fadeoutDuration) {
+        Trace.beginSection("KeyguardViewMediator#startKeyguardExitAnimation");
         Message msg = mHandler.obtainMessage(START_KEYGUARD_EXIT_ANIM,
                 new StartKeyguardExitAnimParams(startTime, fadeoutDuration));
         mHandler.sendMessage(msg);
+        Trace.endSection();
     }
 
     public void onActivityDrawn() {
         mHandler.sendEmptyMessage(ON_ACTIVITY_DRAWN);
     }
+
     public ViewMediatorCallback getViewMediatorCallback() {
         return mViewMediatorCallback;
+    }
+
+    public LockPatternUtils getLockPatternUtils() {
+        return mLockPatternUtils;
     }
 
     @Override
@@ -1677,6 +1991,7 @@ public class KeyguardViewMediator extends SystemUI {
         pw.print("  mBootCompleted: "); pw.println(mBootCompleted);
         pw.print("  mBootSendUserPresent: "); pw.println(mBootSendUserPresent);
         pw.print("  mExternallyEnabled: "); pw.println(mExternallyEnabled);
+        pw.print("  mShuttingDown: "); pw.println(mShuttingDown);
         pw.print("  mNeedToReshowWhenReenabled: "); pw.println(mNeedToReshowWhenReenabled);
         pw.print("  mShowing: "); pw.println(mShowing);
         pw.print("  mInputRestricted: "); pw.println(mInputRestricted);
@@ -1725,6 +2040,35 @@ public class KeyguardViewMediator extends SystemUI {
         }
     }
 
+    private void notifyTrustedChangedLocked(boolean trusted) {
+        int size = mKeyguardStateCallbacks.size();
+        for (int i = size - 1; i >= 0; i--) {
+            try {
+                mKeyguardStateCallbacks.get(i).onTrustedChanged(trusted);
+            } catch (RemoteException e) {
+                Slog.w(TAG, "Failed to call notifyTrustedChangedLocked", e);
+                if (e instanceof DeadObjectException) {
+                    mKeyguardStateCallbacks.remove(i);
+                }
+            }
+        }
+    }
+
+    private void notifyHasLockscreenWallpaperChanged(boolean hasLockscreenWallpaper) {
+        int size = mKeyguardStateCallbacks.size();
+        for (int i = size - 1; i >= 0; i--) {
+            try {
+                mKeyguardStateCallbacks.get(i).onHasLockscreenWallpaperChanged(
+                        hasLockscreenWallpaper);
+            } catch (RemoteException e) {
+                Slog.w(TAG, "Failed to call onHasLockscreenWallpaperChanged", e);
+                if (e instanceof DeadObjectException) {
+                    mKeyguardStateCallbacks.remove(i);
+                }
+            }
+        }
+    }
+
     public void addStateMonitorCallback(IKeyguardStateCallback callback) {
         synchronized (this) {
             mKeyguardStateCallbacks.add(callback);
@@ -1732,8 +2076,11 @@ public class KeyguardViewMediator extends SystemUI {
                 callback.onSimSecureStateChanged(mUpdateMonitor.isSimPinSecure());
                 callback.onShowingStateChanged(mShowing);
                 callback.onInputRestrictedStateChanged(mInputRestricted);
+                callback.onTrustedChanged(mUpdateMonitor.getUserHasTrust(
+                        KeyguardUpdateMonitor.getCurrentUser()));
+                callback.onHasLockscreenWallpaperChanged(mUpdateMonitor.hasLockscreenWallpaper());
             } catch (RemoteException e) {
-                Slog.w(TAG, "Failed to call onShowingStateChanged or onSimSecureStateChanged or onInputRestrictedStateChanged", e);
+                Slog.w(TAG, "Failed to call to IKeyguardStateCallback", e);
             }
         }
     }

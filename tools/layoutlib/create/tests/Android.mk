@@ -15,8 +15,6 @@
 LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
-LOCAL_JAVA_LANGUAGE_VERSION := 1.8
-
 # Only compile source java files in this lib.
 LOCAL_SRC_FILES := $(call all-java-files-under, com)
 
@@ -25,8 +23,8 @@ LOCAL_JAVA_RESOURCE_DIRS := data mock_data
 LOCAL_MODULE := layoutlib-create-tests
 LOCAL_MODULE_TAGS := optional
 
-LOCAL_JAVA_LIBRARIES := layoutlib_create junit
-LOCAL_STATIC_JAVA_LIBRARIES := asm-5.0
+LOCAL_JAVA_LIBRARIES := layoutlib_create junit-host
+LOCAL_STATIC_JAVA_LIBRARIES := asm-5.2
 
 include $(BUILD_HOST_JAVA_LIBRARY)
 

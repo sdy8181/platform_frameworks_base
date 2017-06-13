@@ -19,8 +19,9 @@ include $(CLEAR_VARS)
 LOCAL_SRC_FILES := \
     com_android_frameworks_coretests_JNITest.cpp
 
-LOCAL_SHARED_LIBRARIES := \
-    libnativehelper
+LOCAL_SDK_VERSION := 16
+
+LOCAL_CFLAGS += -Wall -Werror
 
 LOCAL_MODULE := libframeworks_coretests_jni
 

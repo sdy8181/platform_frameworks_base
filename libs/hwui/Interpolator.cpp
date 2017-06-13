@@ -16,8 +16,9 @@
 
 #include "Interpolator.h"
 
-#include <cmath>
-#include <cutils/log.h>
+#include <algorithm>
+
+#include <log/log.h>
 
 #include "utils/MathUtils.h"
 
@@ -97,7 +98,8 @@ LUTInterpolator::~LUTInterpolator() {
 }
 
 float LUTInterpolator::interpolate(float input) {
-    float lutpos = input * mSize;
+    // lut position should only be at the end of the table when input is 1f.
+    float lutpos = input * (mSize - 1);
     if (lutpos >= (mSize - 1)) {
         return mValues[mSize - 1];
     }
@@ -106,7 +108,7 @@ float LUTInterpolator::interpolate(float input) {
     weight = modff(lutpos, &ipart);
 
     int i1 = (int) ipart;
-    int i2 = MathUtils::min(i1 + 1, (int) mSize - 1);
+    int i2 = std::min(i1 + 1, (int) mSize - 1);
 
     LOG_ALWAYS_FATAL_IF(i1 < 0 || i2 < 0, "negatives in interpolation!"
             " i1=%d, i2=%d, input=%f, lutpos=%f, size=%zu, values=%p, ipart=%f, weight=%f",

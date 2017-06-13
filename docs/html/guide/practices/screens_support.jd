@@ -139,7 +139,7 @@ or position in a density-independent way.
   <p>The density-independent pixel is equivalent to one physical pixel on a 160 dpi screen, which is
 the baseline density assumed by the system for a "medium" density screen. At runtime, the system
 transparently handles any scaling of the dp units, as necessary, based on the actual density of the
-screen in use. The conversion of dp units to screen pixels is simple: 
+screen in use. The conversion of dp units to screen pixels is simple:
 <nobr><code>px = dp * (dpi / 160)</code></nobr>.
 For example, on a 240 dpi screen, 1 dp equals 1.5 physical pixels. You should always use dp units
 when defining your application's UI, to ensure proper display of your UI on screens with different
@@ -214,7 +214,7 @@ changes in screen density.</p>
 </ul>
 
 <p class="note"><strong>Note:</strong> These minimum screen sizes were not as well defined prior to
-Android 3.0, so you may encounter some devices that are mis-classified between normal and large. 
+Android 3.0, so you may encounter some devices that are mis-classified between normal and large.
 These are also based on the physical resolution of the screen, so may vary across devices&mdash;for
 example a 1024x720 tablet with a system bar actually has a bit less space available to the
 application due to it being used by the system bar.</p>
@@ -677,7 +677,7 @@ a bitmap drawable that's 48x48 pixels for medium-density screens, all the differ
   <li>48x48 (1.0x baseline) for medium-density</li>
   <li>72x72 (1.5x) for high-density</li>
   <li>96x96 (2.0x) for extra-high-density</li>
-  <li>180x180 (3.0x) for extra-extra-high-density</li>
+  <li>144x144 (3.0x) for extra-extra-high-density</li>
   <li>192x192 (4.0x) for extra-extra-extra-high-density (launcher icon only; see
     <a href="#xxxhdpi-note">note</a> above)</li>
 </ul>
@@ -904,7 +904,7 @@ href="{@docRoot}guide/topics/manifest/supports-screens-element.html">&lt;support
 manifest element:</p>
 
 <dl>
-  
+
   <dt><a
 href="{@docRoot}guide/topics/manifest/supports-screens-element.html#requiresSmallest">
 {@code android:requiresSmallestWidthDp}</a></dt>
@@ -988,7 +988,7 @@ configurations.</p>
 on different screens:</p>
 
 <ol>
-  <li>Use {@code wrap_content}, {@code fill_parent}, or {@code dp} units when specifying
+  <li>Use {@code wrap_content}, {@code match_parent}, or {@code dp} units when specifying
 dimensions in an XML layout file</li>
   <li>Do not use hard coded pixel values in your application code</li>
   <li>Do not use {@code AbsoluteLayout} (it's deprecated)</li>
@@ -998,7 +998,7 @@ dimensions in an XML layout file</li>
 <p>The following sections provide more details.</p>
 
 
-<h3 id="use-relative">1. Use wrap_content, fill_parent, or the dp unit for layout dimensions</h3>
+<h3 id="use-relative">1. Use wrap_content, match_parent, or the dp unit for layout dimensions</h3>
 
 <p>When defining the <a
 href="{@docRoot}reference/android/view/ViewGroup.LayoutParams.html#attr_android:layout_width"
@@ -1006,7 +1006,7 @@ href="{@docRoot}reference/android/view/ViewGroup.LayoutParams.html#attr_android:
 href="{@docRoot}reference/android/view/ViewGroup.LayoutParams.html#attr_android:layout_height"
 >{@code android:layout_height}</a> for
 views in an XML layout file, using <code>"wrap_content"</code>,
-<code>"fill_parent"</code> or <code>dp</code> units guarantees that the view is
+<code>"match_parent"</code> or <code>dp</code> units guarantees that the view is
 given an appropriate size on the current device screen.</p>
 
 <p>For instance, a view with a <code>layout_width="100dp"</code> measures 100 pixels wide on

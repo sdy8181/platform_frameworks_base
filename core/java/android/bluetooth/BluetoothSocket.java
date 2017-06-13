@@ -27,6 +27,7 @@ import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.UUID;
 import android.net.LocalSocket;
@@ -234,15 +235,15 @@ public final class BluetoothSocket implements Closeable {
         BluetoothSocket as = new BluetoothSocket(this);
         as.mSocketState = SocketState.CONNECTED;
         FileDescriptor[] fds = mSocket.getAncillaryFileDescriptors();
-        if (DBG) Log.d(TAG, "socket fd passed by stack  fds: " + fds);
+        if (DBG) Log.d(TAG, "socket fd passed by stack fds: " + Arrays.toString(fds));
         if(fds == null || fds.length != 1) {
-            Log.e(TAG, "socket fd passed from stack failed, fds: " + fds);
+            Log.e(TAG, "socket fd passed from stack failed, fds: " + Arrays.toString(fds));
             as.close();
             throw new IOException("bt socket acept failed");
         }
 
         as.mPfd = new ParcelFileDescriptor(fds[0]);
-        as.mSocket = new LocalSocket(fds[0]);
+        as.mSocket = LocalSocket.createConnectedLocalSocket(fds[0]);
         as.mSocketIS = as.mSocket.getInputStream();
         as.mSocketOS = as.mSocket.getOutputStream();
         as.mAddress = RemoteAddr;
@@ -366,7 +367,7 @@ public final class BluetoothSocket implements Closeable {
                 if (mSocketState == SocketState.CLOSED) throw new IOException("socket closed");
                 if (mPfd == null) throw new IOException("bt socket connect failed");
                 FileDescriptor fd = mPfd.getFileDescriptor();
-                mSocket = new LocalSocket(fd);
+                mSocket = LocalSocket.createConnectedLocalSocket(fd);
                 mSocketIS = mSocket.getInputStream();
                 mSocketOS = mSocket.getOutputStream();
             }
@@ -415,9 +416,14 @@ public final class BluetoothSocket implements Closeable {
                 if(mSocketState != SocketState.INIT) return EBADFD;
                 if(mPfd == null) return -1;
                 FileDescriptor fd = mPfd.getFileDescriptor();
-                if (DBG) Log.d(TAG, "bindListen(), new LocalSocket ");
-                mSocket = new LocalSocket(fd);
-                if (DBG) Log.d(TAG, "bindListen(), new LocalSocket.getInputStream() ");
+                if (fd == null) {
+                    Log.e(TAG, "bindListen(), null file descriptor");
+                    return -1;
+                }
+
+                if (DBG) Log.d(TAG, "bindListen(), Create LocalSocket");
+                mSocket = LocalSocket.createConnectedLocalSocket(fd);
+                if (DBG) Log.d(TAG, "bindListen(), new LocalSocket.getInputStream()");
                 mSocketIS = mSocket.getInputStream();
                 mSocketOS = mSocket.getOutputStream();
             }
@@ -531,22 +537,19 @@ public final class BluetoothSocket implements Closeable {
                 if(length <= mMaxTxPacketSize) {
                     mSocketOS.write(b, offset, length);
                 } else {
-                    int tmpOffset = offset;
-                    int tmpLength = mMaxTxPacketSize;
-                    int endIndex = offset + length;
-                    boolean done = false;
                     if(DBG) Log.w(TAG, "WARNING: Write buffer larger than L2CAP packet size!\n"
                             + "Packet will be divided into SDU packets of size "
                             + mMaxTxPacketSize);
-                    do{
+                    int tmpOffset = offset;
+                    int bytesToWrite = length;
+                    while (bytesToWrite > 0) {
+                        int tmpLength = (bytesToWrite > mMaxTxPacketSize)
+                                ? mMaxTxPacketSize
+                                : bytesToWrite;
                         mSocketOS.write(b, tmpOffset, tmpLength);
-                        tmpOffset += mMaxTxPacketSize;
-                        if((tmpOffset + mMaxTxPacketSize) > endIndex) {
-                            tmpLength = endIndex - tmpOffset;
-                            done = true;
-                        }
-                    } while(!done);
-
+                        tmpOffset += tmpLength;
+                        bytesToWrite -= tmpLength;
+                    }
                 }
             } else {
                 mSocketOS.write(b, offset, length);
@@ -558,8 +561,9 @@ public final class BluetoothSocket implements Closeable {
 
     @Override
     public void close() throws IOException {
-        if (DBG) Log.d(TAG, "close() in, this: " + this + ", channel: " + mPort + ", state: "
-                + mSocketState);
+        Log.d(TAG, "close() this: " + this + ", channel: " + mPort +
+            ", mSocketIS: " + mSocketIS + ", mSocketOS: " + mSocketOS +
+            "mSocket: " + mSocket + ", mSocketState: " + mSocketState);
         if(mSocketState == SocketState.CLOSED)
             return;
         else
@@ -569,9 +573,6 @@ public final class BluetoothSocket implements Closeable {
                  if(mSocketState == SocketState.CLOSED)
                     return;
                  mSocketState = SocketState.CLOSED;
-                 if (DBG) Log.d(TAG, "close() this: " + this + ", channel: " + mPort +
-                         ", mSocketIS: " + mSocketIS + ", mSocketOS: " + mSocketOS +
-                         "mSocket: " + mSocket);
                  if(mSocket != null) {
                     if (DBG) Log.d(TAG, "Closing mSocket: " + mSocket);
                     mSocket.shutdownInput();

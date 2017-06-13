@@ -21,8 +21,6 @@ import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ObjectAnimator;
 import android.content.Context;
-import android.media.AudioAttributes;
-import android.os.Vibrator;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
@@ -46,6 +44,8 @@ public class ExpandHelper implements Gefingerpoken {
         void setUserExpandedChild(View v, boolean userExpanded);
         void setUserLockedChild(View v, boolean userLocked);
         void expansionStateChanged(boolean isExpanding);
+        int getMaxExpandHeight(ExpandableView view);
+        void setExpansionCancelled(View view);
     }
 
     private static final String TAG = "ExpandHelper";
@@ -80,6 +80,7 @@ public class ExpandHelper implements Gefingerpoken {
     private float mOldHeight;
     private float mNaturalHeight;
     private float mInitialTouchFocusY;
+    private float mInitialTouchX;
     private float mInitialTouchY;
     private float mInitialTouchSpan;
     private float mLastFocusY;
@@ -138,14 +139,14 @@ public class ExpandHelper implements Gefingerpoken {
         }
         public void setHeight(float h) {
             if (DEBUG_SCALE) Log.v(TAG, "SetHeight: setting to " + h);
-            mView.setContentHeight((int) h);
+            mView.setActualHeight((int) h);
             mCurrentHeight = h;
         }
         public float getHeight() {
-            return mView.getContentHeight();
+            return mView.getActualHeight();
         }
-        public int getNaturalHeight(int maximum) {
-            return Math.min(maximum, mView.getMaxContentHeight());
+        public int getNaturalHeight() {
+            return mCallback.getMaxExpandHeight(mView);
         }
     }
 
@@ -194,7 +195,7 @@ public class ExpandHelper implements Gefingerpoken {
 
     private float clamp(float target) {
         float out = target;
-        out = out < mSmallSize ? mSmallSize : (out > mLargeSize ? mLargeSize : out);
+        out = out < mSmallSize ? mSmallSize : out;
         out = out > mNaturalHeight ? mNaturalHeight : out;
         return out;
     }
@@ -293,7 +294,8 @@ public class ExpandHelper implements Gefingerpoken {
                 }
                 if (mWatchingForPull) {
                     final float yDiff = ev.getRawY() - mInitialTouchY;
-                    if (yDiff > mTouchSlop) {
+                    final float xDiff = ev.getRawX() - mInitialTouchX;
+                    if (yDiff > mTouchSlop && yDiff > Math.abs(xDiff)) {
                         if (DEBUG) Log.v(TAG, "got venetian gesture (dy=" + yDiff + "px)");
                         mWatchingForPull = false;
                         if (mResizedView != null && !isFullyExpanded(mResizedView)) {
@@ -317,13 +319,15 @@ public class ExpandHelper implements Gefingerpoken {
                     mResizedView = null;
                     mWatchingForPull = false;
                 }
-                mInitialTouchY = ev.getY();
+                mInitialTouchY = ev.getRawY();
+                mInitialTouchX = ev.getRawX();
                 break;
 
             case MotionEvent.ACTION_CANCEL:
             case MotionEvent.ACTION_UP:
                 if (DEBUG) Log.d(TAG, "up/cancel");
-                finishExpanding(false, getCurrentVelocity());
+                finishExpanding(ev.getActionMasked() == MotionEvent.ACTION_CANCEL /* forceAbort */,
+                        getCurrentVelocity());
                 clearView();
                 break;
             }
@@ -381,13 +385,14 @@ public class ExpandHelper implements Gefingerpoken {
     }
 
     private boolean isFullyExpanded(ExpandableView underFocus) {
-        return underFocus.areChildrenExpanded() || underFocus.getIntrinsicHeight()
-                - underFocus.getBottomDecorHeight() == underFocus.getMaxContentHeight();
+        return underFocus.getIntrinsicHeight() == underFocus.getMaxContentHeight()
+                && (!underFocus.isSummaryWithChildren() || underFocus.areChildrenExpanded());
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
-        if (!isEnabled()) {
+        if (!isEnabled() && !mExpanding) {
+            // In case we're expanding we still want to finish the current motion.
             return false;
         }
         trackVelocity(ev);
@@ -411,12 +416,14 @@ public class ExpandHelper implements Gefingerpoken {
                 mWatchingForPull = mScrollAdapter != null &&
                         isInside(mScrollAdapter.getHostView(), x, y);
                 mResizedView = findView(x, y);
-                mInitialTouchY = ev.getY();
+                mInitialTouchX = ev.getRawX();
+                mInitialTouchY = ev.getRawY();
                 break;
             case MotionEvent.ACTION_MOVE: {
                 if (mWatchingForPull) {
                     final float yDiff = ev.getRawY() - mInitialTouchY;
-                    if (yDiff > mTouchSlop) {
+                    final float xDiff = ev.getRawX() - mInitialTouchX;
+                    if (yDiff > mTouchSlop && yDiff > Math.abs(xDiff)) {
                         if (DEBUG) Log.v(TAG, "got venetian gesture (dy=" + yDiff + "px)");
                         mWatchingForPull = false;
                         if (mResizedView != null && !isFullyExpanded(mResizedView)) {
@@ -452,9 +459,7 @@ public class ExpandHelper implements Gefingerpoken {
                     mScaler.setHeight(newHeight);
                     mLastMotionY = ev.getRawY();
                     if (isFinished) {
-                        mCallback.setUserExpandedChild(mResizedView, expanded);
                         mCallback.expansionStateChanged(false);
-                        return false;
                     } else {
                         mCallback.expansionStateChanged(true);
                     }
@@ -482,7 +487,8 @@ public class ExpandHelper implements Gefingerpoken {
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 if (DEBUG) Log.d(TAG, "up/cancel");
-                finishExpanding(false, getCurrentVelocity());
+                finishExpanding(!isEnabled() || ev.getActionMasked() == MotionEvent.ACTION_CANCEL,
+                        getCurrentVelocity());
                 clearView();
                 break;
         }
@@ -509,9 +515,11 @@ public class ExpandHelper implements Gefingerpoken {
         mScaler.setView(v);
         mOldHeight = mScaler.getHeight();
         mCurrentHeight = mOldHeight;
-        if (mCallback.canChildBeExpanded(v)) {
+        boolean canBeExpanded = mCallback.canChildBeExpanded(v);
+        if (canBeExpanded) {
             if (DEBUG) Log.d(TAG, "working on an expandable child");
-            mNaturalHeight = mScaler.getNaturalHeight(mLargeSize);
+            mNaturalHeight = mScaler.getNaturalHeight();
+            mSmallSize = v.getCollapsedHeight();
         } else {
             if (DEBUG) Log.d(TAG, "working on a non-expandable child");
             mNaturalHeight = mOldHeight;
@@ -521,39 +529,68 @@ public class ExpandHelper implements Gefingerpoken {
         return true;
     }
 
-    private void finishExpanding(boolean force, float velocity) {
+    /**
+     * Finish the current expand motion
+     * @param forceAbort whether the expansion should be forcefully aborted and returned to the old
+     *                   state
+     * @param velocity the velocity this was expanded/ collapsed with
+     */
+    private void finishExpanding(boolean forceAbort, float velocity) {
         if (!mExpanding) return;
 
         if (DEBUG) Log.d(TAG, "scale in finishing on view: " + mResizedView);
 
         float currentHeight = mScaler.getHeight();
-        float targetHeight = mSmallSize;
-        float h = mScaler.getHeight();
         final boolean wasClosed = (mOldHeight == mSmallSize);
-        if (wasClosed) {
-            targetHeight = (force || currentHeight > mSmallSize) ? mNaturalHeight : mSmallSize;
+        boolean nowExpanded;
+        if (!forceAbort) {
+            if (wasClosed) {
+                nowExpanded = currentHeight > mOldHeight && velocity >= 0;
+            } else {
+                nowExpanded = currentHeight >= mOldHeight || velocity > 0;
+            }
+            nowExpanded |= mNaturalHeight == mSmallSize;
         } else {
-            targetHeight = (force || currentHeight < mNaturalHeight) ? mSmallSize : mNaturalHeight;
+            nowExpanded = !wasClosed;
         }
         if (mScaleAnimation.isRunning()) {
             mScaleAnimation.cancel();
         }
-        mCallback.setUserExpandedChild(mResizedView, targetHeight == mNaturalHeight);
         mCallback.expansionStateChanged(false);
-        if (targetHeight != currentHeight) {
+        int naturalHeight = mScaler.getNaturalHeight();
+        float targetHeight = nowExpanded ? naturalHeight : mSmallSize;
+        if (targetHeight != currentHeight && mEnabled) {
             mScaleAnimation.setFloatValues(targetHeight);
             mScaleAnimation.setupStartValues();
             final View scaledView = mResizedView;
+            final boolean expand = nowExpanded;
             mScaleAnimation.addListener(new AnimatorListenerAdapter() {
+                public boolean mCancelled;
+
                 @Override
                 public void onAnimationEnd(Animator animation) {
+                    if (!mCancelled) {
+                        mCallback.setUserExpandedChild(scaledView, expand);
+                    } else {
+                        mCallback.setExpansionCancelled(scaledView);
+                    }
                     mCallback.setUserLockedChild(scaledView, false);
                     mScaleAnimation.removeListener(this);
                 }
+
+                @Override
+                public void onAnimationCancel(Animator animation) {
+                    mCancelled = true;
+                }
             });
+            velocity = nowExpanded == velocity >= 0 ? velocity : 0;
             mFlingAnimationUtils.apply(mScaleAnimation, currentHeight, targetHeight, velocity);
             mScaleAnimation.start();
         } else {
+            if (targetHeight != currentHeight) {
+                mScaler.setHeight(targetHeight);
+            }
+            mCallback.setUserExpandedChild(mResizedView, nowExpanded);
             mCallback.setUserLockedChild(mResizedView, false);
         }
 
@@ -575,7 +612,7 @@ public class ExpandHelper implements Gefingerpoken {
      * Use this to abort any pending expansions in progress.
      */
     public void cancel() {
-        finishExpanding(true, 0f /* velocity */);
+        finishExpanding(true /* forceAbort */, 0f /* velocity */);
         clearView();
 
         // reset the gesture detector

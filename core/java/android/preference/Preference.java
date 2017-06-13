@@ -719,6 +719,9 @@ public class Preference implements Comparable<Preference> {
      * @see #setIcon(Drawable)
      */
     public Drawable getIcon() {
+        if (mIcon == null && mIconResId != 0) {
+            mIcon = getContext().getDrawable(mIconResId);
+        }
         return mIcon;
     }
 
@@ -1483,11 +1486,9 @@ public class Preference implements Comparable<Preference> {
      * @return True if the Preference is persistent. (This is not whether the
      *         value was persisted, since we may not necessarily commit if there
      *         will be a batch commit later.)
-     * @see #getPersistedString(Set)
-     * 
-     * @hide Pending API approval
+     * @see #getPersistedStringSet(Set)
      */
-    protected boolean persistStringSet(Set<String> values) {
+    public boolean persistStringSet(Set<String> values) {
         if (shouldPersist()) {
             // Shouldn't store null
             if (values.equals(getPersistedStringSet(null))) {
@@ -1516,10 +1517,8 @@ public class Preference implements Comparable<Preference> {
      * @return The value from the SharedPreferences or the default return
      *         value.
      * @see #persistStringSet(Set)
-     * 
-     * @hide Pending API approval
      */
-    protected Set<String> getPersistedStringSet(Set<String> defaultReturnValue) {
+    public Set<String> getPersistedStringSet(Set<String> defaultReturnValue) {
         if (!shouldPersist()) {
             return defaultReturnValue;
         }

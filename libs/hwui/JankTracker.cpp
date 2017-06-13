@@ -13,15 +13,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "JankTracker.h"
 
-#include <algorithm>
-#include <cutils/ashmem.h>
-#include <cutils/log.h>
-#include <cstdio>
 #include <errno.h>
 #include <inttypes.h>
 #include <sys/mman.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <limits>
+
+#include <cutils/ashmem.h>
+#include <log/log.h>
+
+#include "Properties.h"
+#include "utils/TimeUtils.h"
 
 namespace android {
 namespace uirenderer {
@@ -52,32 +60,35 @@ static const Comparison COMPARISONS[] = {
 static const int64_t IGNORE_EXCEEDING = seconds_to_nanoseconds(10);
 
 /*
- * Frames that are exempt from jank metrics.
- * First-draw frames, for example, are expected to
- * be slow, this is hidden from the user with window animations and
- * other tricks
- *
- * Similarly, we don't track direct-drawing via Surface:lockHardwareCanvas()
+ * We don't track direct-drawing via Surface:lockHardwareCanvas()
  * for now
  *
  * TODO: kSurfaceCanvas can negatively impact other drawing by using up
  * time on the RenderThread, figure out how to attribute that as a jank-causer
  */
-static const int64_t EXEMPT_FRAMES_FLAGS
-        = FrameInfoFlags::WindowLayoutChanged
-        | FrameInfoFlags::SurfaceCanvas;
+static const int64_t EXEMPT_FRAMES_FLAGS = FrameInfoFlags::SurfaceCanvas;
 
 // The bucketing algorithm controls so to speak
 // If a frame is <= to this it goes in bucket 0
-static const uint32_t kBucketMinThreshold = 7;
+static const uint32_t kBucketMinThreshold = 5;
 // If a frame is > this, start counting in increments of 2ms
 static const uint32_t kBucket2msIntervals = 32;
 // If a frame is > this, start counting in increments of 4ms
 static const uint32_t kBucket4msIntervals = 48;
 
+// For testing purposes to try and eliminate test infra overhead we will
+// consider any unknown delay of frame start as part of the test infrastructure
+// and filter it out of the frame profile data
+static FrameInfoIndex sFrameStart = FrameInfoIndex::IntendedVsync;
+
+// The interval of the slow frame histogram
+static const uint32_t kSlowFrameBucketIntervalMs = 50;
+// The start point of the slow frame bucket in ms
+static const uint32_t kSlowFrameBucketStartMs = 150;
+
 // This will be called every frame, performance sensitive
 // Uses bit twiddling to avoid branching while achieving the packing desired
-static uint32_t frameCountIndexForFrameTime(nsecs_t frameTime, uint32_t max) {
+static uint32_t frameCountIndexForFrameTime(nsecs_t frameTime) {
     uint32_t index = static_cast<uint32_t>(ns2ms(frameTime));
     // If index > kBucketMinThreshold mask will be 0xFFFFFFFF as a result
     // of negating 1 (twos compliment, yaay) else mask will be 0
@@ -95,7 +106,7 @@ static uint32_t frameCountIndexForFrameTime(nsecs_t frameTime, uint32_t max) {
     // be a pretty garbage value right now. However, mask is 0 so we'll end
     // up with the desired result of 0.
     index = (index - kBucketMinThreshold) & mask;
-    return index < max ? index : max;
+    return index;
 }
 
 // Only called when dumping stats, less performance sensitive
@@ -112,11 +123,27 @@ static uint32_t frameTimeForFrameCountIndex(uint32_t index) {
     return index;
 }
 
-JankTracker::JankTracker(nsecs_t frameIntervalNanos) {
+JankTracker::JankTracker(const DisplayInfo& displayInfo) {
     // By default this will use malloc memory. It may be moved later to ashmem
     // if there is shared space for it and a request comes in to do that.
     mData = new ProfileData;
     reset();
+    nsecs_t frameIntervalNanos = static_cast<nsecs_t>(1_s / displayInfo.fps);
+#if USE_HWC2
+    nsecs_t sfOffset = frameIntervalNanos - (displayInfo.presentationDeadline - 1_ms);
+    nsecs_t offsetDelta = sfOffset - displayInfo.appVsyncOffset;
+    // There are two different offset cases. If the offsetDelta is positive
+    // and small, then the intention is to give apps extra time by leveraging
+    // pipelining between the UI & RT threads. If the offsetDelta is large or
+    // negative, the intention is to subtract time from the total duration
+    // in which case we can't afford to wait for dequeueBuffer blockage.
+    if (offsetDelta <= 4_ms && offsetDelta >= 0) {
+        // SF will begin composition at VSYNC-app + offsetDelta. If we are triple
+        // buffered, this is the expected time at which dequeueBuffer will
+        // return due to the staggering of VSYNC-app & VSYNC-sf.
+        mDequeueTimeForgiveness = offsetDelta + 4_ms;
+    }
+#endif
     setFrameInterval(frameIntervalNanos);
 }
 
@@ -205,21 +232,42 @@ void JankTracker::setFrameInterval(nsecs_t frameInterval) {
 void JankTracker::addFrame(const FrameInfo& frame) {
     mData->totalFrameCount++;
     // Fast-path for jank-free frames
-    int64_t totalDuration =
-            frame[FrameInfoIndex::FrameCompleted] - frame[FrameInfoIndex::IntendedVsync];
-    uint32_t framebucket = frameCountIndexForFrameTime(
-            totalDuration, mData->frameCounts.size());
+    int64_t totalDuration = frame.duration(sFrameStart, FrameInfoIndex::FrameCompleted);
+    if (mDequeueTimeForgiveness
+            && frame[FrameInfoIndex::DequeueBufferDuration] > 500_us) {
+        nsecs_t expectedDequeueDuration =
+                mDequeueTimeForgiveness + frame[FrameInfoIndex::Vsync]
+                - frame[FrameInfoIndex::IssueDrawCommandsStart];
+        if (expectedDequeueDuration > 0) {
+            // Forgive only up to the expected amount, but not more than
+            // the actual time spent blocked.
+            nsecs_t forgiveAmount = std::min(expectedDequeueDuration,
+                    frame[FrameInfoIndex::DequeueBufferDuration]);
+            totalDuration -= forgiveAmount;
+        }
+    }
+    uint32_t framebucket = frameCountIndexForFrameTime(totalDuration);
     // Keep the fast path as fast as possible.
     if (CC_LIKELY(totalDuration < mFrameInterval)) {
         mData->frameCounts[framebucket]++;
         return;
     }
 
+    // Only things like Surface.lockHardwareCanvas() are exempt from tracking
     if (frame[FrameInfoIndex::Flags] & EXEMPT_FRAMES_FLAGS) {
         return;
     }
 
-    mData->frameCounts[framebucket]++;
+    if (framebucket <= mData->frameCounts.size()) {
+        mData->frameCounts[framebucket]++;
+    } else {
+        framebucket = (ns2ms(totalDuration) - kSlowFrameBucketStartMs)
+                / kSlowFrameBucketIntervalMs;
+        framebucket = std::min(framebucket,
+                static_cast<uint32_t>(mData->slowFrameCounts.size() - 1));
+        mData->slowFrameCounts[framebucket]++;
+    }
+
     mData->jankFrameCount++;
 
     for (int i = 0; i < NUM_BUCKETS; i++) {
@@ -239,15 +287,28 @@ void JankTracker::dumpBuffer(const void* buffer, size_t bufsize, int fd) {
 }
 
 void JankTracker::dumpData(const ProfileData* data, int fd) {
+    if (sFrameStart != FrameInfoIndex::IntendedVsync) {
+        dprintf(fd, "\nNote: Data has been filtered!");
+    }
     dprintf(fd, "\nStats since: %" PRIu64 "ns", data->statStartTime);
     dprintf(fd, "\nTotal frames rendered: %u", data->totalFrameCount);
     dprintf(fd, "\nJanky frames: %u (%.2f%%)", data->jankFrameCount,
             (float) data->jankFrameCount / (float) data->totalFrameCount * 100.0f);
+    dprintf(fd, "\n50th percentile: %ums", findPercentile(data, 50));
     dprintf(fd, "\n90th percentile: %ums", findPercentile(data, 90));
     dprintf(fd, "\n95th percentile: %ums", findPercentile(data, 95));
     dprintf(fd, "\n99th percentile: %ums", findPercentile(data, 99));
     for (int i = 0; i < NUM_BUCKETS; i++) {
         dprintf(fd, "\nNumber %s: %u", JANK_TYPE_NAMES[i], data->jankTypeCounts[i]);
+    }
+    dprintf(fd, "\nHISTOGRAM:");
+    for (size_t i = 0; i < data->frameCounts.size(); i++) {
+        dprintf(fd, " %ums=%u", frameTimeForFrameCountIndex(i),
+                data->frameCounts[i]);
+    }
+    for (size_t i = 0; i < data->slowFrameCounts.size(); i++) {
+        dprintf(fd, " %zums=%u", (i * kSlowFrameBucketIntervalMs) + kSlowFrameBucketStartMs,
+                data->slowFrameCounts[i]);
     }
     dprintf(fd, "\n");
 }
@@ -255,14 +316,24 @@ void JankTracker::dumpData(const ProfileData* data, int fd) {
 void JankTracker::reset() {
     mData->jankTypeCounts.fill(0);
     mData->frameCounts.fill(0);
+    mData->slowFrameCounts.fill(0);
     mData->totalFrameCount = 0;
     mData->jankFrameCount = 0;
     mData->statStartTime = systemTime(CLOCK_MONOTONIC);
+    sFrameStart = Properties::filterOutTestOverhead
+            ? FrameInfoIndex::HandleInputStart
+            : FrameInfoIndex::IntendedVsync;
 }
 
 uint32_t JankTracker::findPercentile(const ProfileData* data, int percentile) {
     int pos = percentile * data->totalFrameCount / 100;
     int remaining = data->totalFrameCount - pos;
+    for (int i = data->slowFrameCounts.size() - 1; i >= 0; i--) {
+        remaining -= data->slowFrameCounts[i];
+        if (remaining <= 0) {
+            return (i * kSlowFrameBucketIntervalMs) + kSlowFrameBucketStartMs;
+        }
+    }
     for (int i = data->frameCounts.size() - 1; i >= 0; i--) {
         remaining -= data->frameCounts[i];
         if (remaining <= 0) {

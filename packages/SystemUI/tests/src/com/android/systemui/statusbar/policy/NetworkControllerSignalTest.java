@@ -29,6 +29,7 @@ import android.test.suitebuilder.annotation.SmallTest;
 
 import com.android.internal.telephony.PhoneConstants;
 import com.android.internal.telephony.TelephonyIntents;
+import com.android.settingslib.net.DataUsageController;
 import com.android.systemui.R;
 
 import org.mockito.ArgumentCaptor;
@@ -46,7 +47,7 @@ public class NetworkControllerSignalTest extends NetworkControllerBaseTest {
         // Create a new NetworkController as this is currently handled in constructor.
         mNetworkController = new NetworkControllerImpl(mContext, mMockCm, mMockTm, mMockWm, mMockSm,
                 mConfig, Looper.getMainLooper(), mCallbackHandler,
-                mock(AccessPointControllerImpl.class), mock(MobileDataControllerImpl.class),
+                mock(AccessPointControllerImpl.class), mock(DataUsageController.class),
                 mMockSubDefaults);
         setupNetworkController();
 
@@ -95,7 +96,7 @@ public class NetworkControllerSignalTest extends NetworkControllerBaseTest {
         // Create a new NetworkController as this is currently handled in constructor.
         mNetworkController = new NetworkControllerImpl(mContext, mMockCm, mMockTm, mMockWm, mMockSm,
                 mConfig, Looper.getMainLooper(), mCallbackHandler,
-                mock(AccessPointControllerImpl.class), mock(MobileDataControllerImpl.class),
+                mock(AccessPointControllerImpl.class), mock(DataUsageController.class),
                 mMockSubDefaults);
         setupNetworkController();
 
@@ -139,13 +140,12 @@ public class NetworkControllerSignalTest extends NetworkControllerBaseTest {
         for (int testStrength = SignalStrength.SIGNAL_STRENGTH_NONE_OR_UNKNOWN;
                 testStrength <= SignalStrength.SIGNAL_STRENGTH_GREAT; testStrength++) {
             setupDefaultSignal();
-            setConnectivity(NetworkCapabilities.TRANSPORT_CELLULAR, false, false);
             setGsmRoaming(true);
             setLevel(testStrength);
 
             verifyLastMobileDataIndicators(true,
                     TelephonyIcons.TELEPHONY_SIGNAL_STRENGTH_ROAMING[1][testStrength],
-                    TelephonyIcons.ROAMING_ICON);
+                    DEFAULT_ICON, true);
         }
     }
 
@@ -159,7 +159,7 @@ public class NetworkControllerSignalTest extends NetworkControllerBaseTest {
 
             verifyLastMobileDataIndicators(true,
                     TelephonyIcons.TELEPHONY_SIGNAL_STRENGTH_ROAMING[1][testStrength],
-                    TelephonyIcons.ROAMING_ICON);
+                    TelephonyIcons.DATA_1X[1][0 /* No direction */], true);
         }
     }
 

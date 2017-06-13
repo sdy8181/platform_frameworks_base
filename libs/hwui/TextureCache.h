@@ -21,9 +21,11 @@
 
 #include <utils/LruCache.h>
 #include <utils/Mutex.h>
-#include <utils/Vector.h>
 
 #include "Debug.h"
+
+#include <vector>
+#include <unordered_map>
 
 namespace android {
 namespace uirenderer {
@@ -76,6 +78,13 @@ public:
     bool prefetchAndMarkInUse(void* ownerToken, const SkBitmap* bitmap);
 
     /**
+     * Attempts to precache the SkBitmap. Returns true if a Texture was successfully
+     * acquired for the bitmap, false otherwise. Does not mark the Texture
+     * as in use and won't update currently in-use Textures.
+     */
+    bool prefetch(const SkBitmap* bitmap);
+
+    /**
      * Returns the texture associated with the specified bitmap from either within the cache, or
      * the AssetAtlas. If the texture cannot be found in the cache, a new texture is generated.
      */
@@ -107,10 +116,6 @@ public:
     void clear();
 
     /**
-     * Sets the maximum size of the cache in bytes.
-     */
-    void setMaxSize(uint32_t maxSize);
-    /**
      * Returns the maximum size of the cache in bytes.
      */
     uint32_t getMaxSize();
@@ -124,11 +129,6 @@ public:
      * is defined by the flush rate.
      */
     void flush();
-    /**
-     * Indicates the percentage of the cache to retain when a
-     * memory trim is requested (see Caches::flush).
-     */
-    void setFlushRate(float flushRate);
 
     void setAssetAtlas(AssetAtlas* assetAtlas);
 
@@ -143,29 +143,17 @@ private:
     Texture* get(const SkBitmap* bitmap, AtlasUsageType atlasUsageType);
     Texture* getCachedTexture(const SkBitmap* bitmap, AtlasUsageType atlasUsageType);
 
-    /**
-     * Generates the texture from a bitmap into the specified texture structure.
-     *
-     * @param regenerate If true, the bitmap data is reuploaded into the texture, but
-     *        no new texture is generated.
-     */
-    void generateTexture(const SkBitmap* bitmap, Texture* texture, bool regenerate = false);
-
-    void uploadLoFiTexture(bool resize, const SkBitmap* bitmap, uint32_t width, uint32_t height);
-    void uploadToTexture(bool resize, GLenum format, GLsizei stride, GLsizei bpp,
-            GLsizei width, GLsizei height, GLenum type, const GLvoid * data);
-
     LruCache<uint32_t, Texture*> mCache;
 
     uint32_t mSize;
-    uint32_t mMaxSize;
+    const uint32_t mMaxSize;
     GLint mMaxTextureSize;
 
-    float mFlushRate;
+    const float mFlushRate;
 
     bool mDebugEnabled;
 
-    Vector<uint32_t> mGarbage;
+    std::vector<uint32_t> mGarbage;
     mutable Mutex mLock;
 
     AssetAtlas* mAssetAtlas;

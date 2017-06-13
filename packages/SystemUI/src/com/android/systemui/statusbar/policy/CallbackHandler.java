@@ -19,11 +19,10 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.telephony.SubscriptionInfo;
-
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.systemui.statusbar.policy.NetworkController.EmergencyListener;
 import com.android.systemui.statusbar.policy.NetworkController.IconState;
 import com.android.systemui.statusbar.policy.NetworkController.SignalCallback;
-import com.android.systemui.statusbar.policy.NetworkControllerImpl.EmergencyListener;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -126,14 +125,14 @@ public class CallbackHandler extends Handler implements EmergencyListener, Signa
     public void setMobileDataIndicators(final IconState statusIcon, final IconState qsIcon,
             final int statusType, final int qsType,final boolean activityIn,
             final boolean activityOut, final String typeContentDescription,
-            final String description, final boolean isWide, final int subId) {
+            final String description, final boolean isWide, final int subId, boolean roaming) {
         post(new Runnable() {
             @Override
             public void run() {
                 for (SignalCallback signalCluster : mSignalCallbacks) {
                     signalCluster.setMobileDataIndicators(statusIcon, qsIcon, statusType, qsType,
                             activityIn, activityOut, typeContentDescription, description, isWide,
-                            subId);
+                            subId, roaming);
                 }
             }
         });

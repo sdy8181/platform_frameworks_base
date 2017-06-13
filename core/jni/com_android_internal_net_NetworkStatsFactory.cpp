@@ -43,6 +43,8 @@ static struct {
     jfieldID uid;
     jfieldID set;
     jfieldID tag;
+    jfieldID metered;
+    jfieldID roaming;
     jfieldID rxBytes;
     jfieldID rxPackets;
     jfieldID txBytes;
@@ -238,6 +240,12 @@ static int readNetworkStatsDetail(JNIEnv* env, jclass clazz, jobject stats,
     ScopedIntArrayRW tag(env, get_int_array(env, stats,
             gNetworkStatsClassInfo.tag, size, grow));
     if (tag.get() == NULL) return -1;
+    ScopedIntArrayRW metered(env, get_int_array(env, stats,
+            gNetworkStatsClassInfo.metered, size, grow));
+    if (metered.get() == NULL) return -1;
+    ScopedIntArrayRW roaming(env, get_int_array(env, stats,
+            gNetworkStatsClassInfo.roaming, size, grow));
+    if (roaming.get() == NULL) return -1;
     ScopedLongArrayRW rxBytes(env, get_long_array(env, stats,
             gNetworkStatsClassInfo.rxBytes, size, grow));
     if (rxBytes.get() == NULL) return -1;
@@ -261,6 +269,7 @@ static int readNetworkStatsDetail(JNIEnv* env, jclass clazz, jobject stats,
         uid[i] = lines[i].uid;
         set[i] = lines[i].set;
         tag[i] = lines[i].tag;
+        // Metered and Roaming are populated in Java-land by inspecting the iface properties.
         rxBytes[i] = lines[i].rxBytes;
         rxPackets[i] = lines[i].rxPackets;
         txBytes[i] = lines[i].txBytes;
@@ -274,6 +283,8 @@ static int readNetworkStatsDetail(JNIEnv* env, jclass clazz, jobject stats,
         env->SetObjectField(stats, gNetworkStatsClassInfo.uid, uid.getJavaArray());
         env->SetObjectField(stats, gNetworkStatsClassInfo.set, set.getJavaArray());
         env->SetObjectField(stats, gNetworkStatsClassInfo.tag, tag.getJavaArray());
+        env->SetObjectField(stats, gNetworkStatsClassInfo.metered, metered.getJavaArray());
+        env->SetObjectField(stats, gNetworkStatsClassInfo.roaming, roaming.getJavaArray());
         env->SetObjectField(stats, gNetworkStatsClassInfo.rxBytes, rxBytes.getJavaArray());
         env->SetObjectField(stats, gNetworkStatsClassInfo.rxPackets, rxPackets.getJavaArray());
         env->SetObjectField(stats, gNetworkStatsClassInfo.txBytes, txBytes.getJavaArray());
@@ -305,6 +316,8 @@ int register_com_android_internal_net_NetworkStatsFactory(JNIEnv* env) {
     gNetworkStatsClassInfo.uid = GetFieldIDOrDie(env, clazz, "uid", "[I");
     gNetworkStatsClassInfo.set = GetFieldIDOrDie(env, clazz, "set", "[I");
     gNetworkStatsClassInfo.tag = GetFieldIDOrDie(env, clazz, "tag", "[I");
+    gNetworkStatsClassInfo.metered = GetFieldIDOrDie(env, clazz, "metered", "[I");
+    gNetworkStatsClassInfo.roaming = GetFieldIDOrDie(env, clazz, "roaming", "[I");
     gNetworkStatsClassInfo.rxBytes = GetFieldIDOrDie(env, clazz, "rxBytes", "[J");
     gNetworkStatsClassInfo.rxPackets = GetFieldIDOrDie(env, clazz, "rxPackets", "[J");
     gNetworkStatsClassInfo.txBytes = GetFieldIDOrDie(env, clazz, "txBytes", "[J");

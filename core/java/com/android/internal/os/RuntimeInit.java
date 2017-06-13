@@ -20,6 +20,7 @@ import android.app.ActivityManagerNative;
 import android.app.ActivityThread;
 import android.app.ApplicationErrorReport;
 import android.os.Build;
+import android.os.DeadObjectException;
 import android.os.Debug;
 import android.os.IBinder;
 import android.os.Process;
@@ -42,8 +43,8 @@ import org.apache.harmony.luni.internal.util.TimezoneGetter;
  * @hide
  */
 public class RuntimeInit {
-    private final static String TAG = "AndroidRuntime";
-    private final static boolean DEBUG = false;
+    final static String TAG = "AndroidRuntime";
+    final static boolean DEBUG = false;
 
     /** true if commonInit() has been called */
     private static boolean initialized;
@@ -52,48 +53,76 @@ public class RuntimeInit {
 
     private static volatile boolean mCrashing = false;
 
-    private static final native void nativeZygoteInit();
     private static final native void nativeFinishInit();
     private static final native void nativeSetExitWithoutCleanup(boolean exitWithoutCleanup);
 
     private static int Clog_e(String tag, String msg, Throwable tr) {
-        return Log.println_native(Log.LOG_ID_CRASH, Log.ERROR, tag,
-                msg + '\n' + Log.getStackTraceString(tr));
+        return Log.printlns(Log.LOG_ID_CRASH, Log.ERROR, tag, msg, tr);
     }
 
     /**
-     * Use this to log a message when a thread exits due to an uncaught
-     * exception.  The framework catches these for the main threads, so
-     * this should only matter for threads created by applications.
+     * Logs a message when a thread encounters an uncaught exception. By
+     * default, {@link KillApplicationHandler} will terminate this process later,
+     * but apps can override that behavior.
      */
-    private static class UncaughtHandler implements Thread.UncaughtExceptionHandler {
+    private static class LoggingHandler implements Thread.UncaughtExceptionHandler {
+        @Override
+        public void uncaughtException(Thread t, Throwable e) {
+            // Don't re-enter if KillApplicationHandler has already run
+            if (mCrashing) return;
+            if (mApplicationObject == null) {
+                // The "FATAL EXCEPTION" string is still used on Android even though
+                // apps can set a custom UncaughtExceptionHandler that renders uncaught
+                // exceptions non-fatal.
+                Clog_e(TAG, "*** FATAL EXCEPTION IN SYSTEM PROCESS: " + t.getName(), e);
+            } else {
+                StringBuilder message = new StringBuilder();
+                // The "FATAL EXCEPTION" string is still used on Android even though
+                // apps can set a custom UncaughtExceptionHandler that renders uncaught
+                // exceptions non-fatal.
+                message.append("FATAL EXCEPTION: ").append(t.getName()).append("\n");
+                final String processName = ActivityThread.currentProcessName();
+                if (processName != null) {
+                    message.append("Process: ").append(processName).append(", ");
+                }
+                message.append("PID: ").append(Process.myPid());
+                Clog_e(TAG, message.toString(), e);
+            }
+        }
+    }
+
+    /**
+     * Handle application death from an uncaught exception.  The framework
+     * catches these for the main threads, so this should only matter for
+     * threads created by applications.  Before this method runs,
+     * {@link LoggingHandler} will already have logged details.
+     */
+    private static class KillApplicationHandler implements Thread.UncaughtExceptionHandler {
         public void uncaughtException(Thread t, Throwable e) {
             try {
                 // Don't re-enter -- avoid infinite loops if crash-reporting crashes.
                 if (mCrashing) return;
                 mCrashing = true;
 
-                if (mApplicationObject == null) {
-                    Clog_e(TAG, "*** FATAL EXCEPTION IN SYSTEM PROCESS: " + t.getName(), e);
-                } else {
-                    StringBuilder message = new StringBuilder();
-                    message.append("FATAL EXCEPTION: ").append(t.getName()).append("\n");
-                    final String processName = ActivityThread.currentProcessName();
-                    if (processName != null) {
-                        message.append("Process: ").append(processName).append(", ");
-                    }
-                    message.append("PID: ").append(Process.myPid());
-                    Clog_e(TAG, message.toString(), e);
+                // Try to end profiling. If a profiler is running at this point, and we kill the
+                // process (below), the in-memory buffer will be lost. So try to stop, which will
+                // flush the buffer. (This makes method trace profiling useful to debug crashes.)
+                if (ActivityThread.currentActivityThread() != null) {
+                    ActivityThread.currentActivityThread().stopProfiling();
                 }
 
                 // Bring up crash dialog, wait for it to be dismissed
                 ActivityManagerNative.getDefault().handleApplicationCrash(
                         mApplicationObject, new ApplicationErrorReport.CrashInfo(e));
             } catch (Throwable t2) {
-                try {
-                    Clog_e(TAG, "Error reporting crash", t2);
-                } catch (Throwable t3) {
-                    // Even Clog_e() fails!  Oh well.
+                if (t2 instanceof DeadObjectException) {
+                    // System process is dead; ignore
+                } else {
+                    try {
+                        Clog_e(TAG, "Error reporting crash", t2);
+                    } catch (Throwable t3) {
+                        // Even Clog_e() fails!  Oh well.
+                    }
                 }
             } finally {
                 // Try everything to make sure this process goes away.
@@ -103,11 +132,15 @@ public class RuntimeInit {
         }
     }
 
-    private static final void commonInit() {
+    protected static final void commonInit() {
         if (DEBUG) Slog.d(TAG, "Entered RuntimeInit!");
 
-        /* set default handler; this applies to all threads in the VM */
-        Thread.setDefaultUncaughtExceptionHandler(new UncaughtHandler());
+        /*
+         * set handlers; these apply to all threads in the VM. Apps can replace
+         * the default handler, but not the pre handler.
+         */
+        Thread.setUncaughtExceptionPreHandler(new LoggingHandler());
+        Thread.setDefaultUncaughtExceptionHandler(new KillApplicationHandler());
 
         /*
          * Install a TimezoneGetter subclass for ZoneInfo.db
@@ -196,7 +229,7 @@ public class RuntimeInit {
      * @param classLoader the classLoader to load {@className} with
      */
     private static void invokeStaticMain(String className, String[] argv, ClassLoader classLoader)
-            throws ZygoteInit.MethodAndArgsCaller {
+            throws Zygote.MethodAndArgsCaller {
         Class<?> cl;
 
         try {
@@ -230,7 +263,7 @@ public class RuntimeInit {
          * clears up all the stack frames that were required in setting
          * up the process.
          */
-        throw new ZygoteInit.MethodAndArgsCaller(m, argv);
+        throw new Zygote.MethodAndArgsCaller(m, argv);
     }
 
     public static final void main(String[] argv) {
@@ -253,51 +286,8 @@ public class RuntimeInit {
         if (DEBUG) Slog.d(TAG, "Leaving RuntimeInit!");
     }
 
-    /**
-     * The main function called when started through the zygote process. This
-     * could be unified with main(), if the native code in nativeFinishInit()
-     * were rationalized with Zygote startup.<p>
-     *
-     * Current recognized args:
-     * <ul>
-     *   <li> <code> [--] &lt;start class name&gt;  &lt;args&gt;
-     * </ul>
-     *
-     * @param targetSdkVersion target SDK version
-     * @param argv arg strings
-     */
-    public static final void zygoteInit(int targetSdkVersion, String[] argv, ClassLoader classLoader)
-            throws ZygoteInit.MethodAndArgsCaller {
-        if (DEBUG) Slog.d(TAG, "RuntimeInit: Starting application from zygote");
-
-        Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "RuntimeInit");
-        redirectLogStreams();
-
-        commonInit();
-        nativeZygoteInit();
-        applicationInit(targetSdkVersion, argv, classLoader);
-    }
-
-    /**
-     * The main function called when an application is started through a
-     * wrapper process.
-     *
-     * When the wrapper starts, the runtime starts {@link RuntimeInit#main}
-     * which calls {@link WrapperInit#main} which then calls this method.
-     * So we don't need to call commonInit() here.
-     *
-     * @param targetSdkVersion target SDK version
-     * @param argv arg strings
-     */
-    public static void wrapperInit(int targetSdkVersion, String[] argv)
-            throws ZygoteInit.MethodAndArgsCaller {
-        if (DEBUG) Slog.d(TAG, "RuntimeInit: Starting application from wrapper");
-
-        applicationInit(targetSdkVersion, argv, null);
-    }
-
-    private static void applicationInit(int targetSdkVersion, String[] argv, ClassLoader classLoader)
-            throws ZygoteInit.MethodAndArgsCaller {
+    protected static void applicationInit(int targetSdkVersion, String[] argv, ClassLoader classLoader)
+            throws Zygote.MethodAndArgsCaller {
         // If the application calls System.exit(), terminate the process
         // immediately without running any shutdown hooks.  It is not possible to
         // shutdown an Android application gracefully.  Among other things, the
@@ -352,8 +342,12 @@ public class RuntimeInit {
                 System.exit(10);
             }
         } catch (Throwable t2) {
-            Slog.e(TAG, "Error reporting WTF", t2);
-            Slog.e(TAG, "Original WTF:", t);
+            if (t2 instanceof DeadObjectException) {
+                // System process is dead; ignore
+            } else {
+                Slog.e(TAG, "Error reporting WTF", t2);
+                Slog.e(TAG, "Original WTF:", t);
+            }
         }
     }
 

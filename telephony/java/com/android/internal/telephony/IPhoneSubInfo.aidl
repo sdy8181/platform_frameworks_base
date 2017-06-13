@@ -16,6 +16,8 @@
 
 package com.android.internal.telephony;
 
+import android.telephony.ImsiEncryptionInfo;
+
 /**
  * Interface used to retrieve various phone-related subscriber information.
  *
@@ -138,6 +140,18 @@ interface IPhoneSubInfo {
     String getCompleteVoiceMailNumberForSubscriber(int subId);
 
     /**
+     * Retrieves the Carrier information used to encrypt IMSI and IMPI.
+     */
+    ImsiEncryptionInfo getCarrierInfoForImsiEncryption(int subId, int keyType,
+    String callingPackage);
+
+    /**
+     * Stores the Carrier information used to encrypt IMSI and IMPI.
+     */
+    void setCarrierInfoForImsiEncryption(int subId, String callingPackage,
+    in ImsiEncryptionInfo imsiEncryptionInfo);
+
+    /**
      * Retrieves the alpha identifier associated with the voice mail number.
      */
     String getVoiceMailAlphaTag(String callingPackage);
@@ -196,8 +210,9 @@ interface IPhoneSubInfo {
      *
      * @param subId subscription ID to be queried
      * @param appType ICC application type (@see com.android.internal.telephony.PhoneConstants#APPTYPE_xxx)
+     * @param authType Authentication type, see PhoneConstants#AUTHTYPE_xxx
      * @param data authentication challenge data
      * @return challenge response
      */
-    String getIccSimChallengeResponse(int subId, int appType, String data);
+    String getIccSimChallengeResponse(int subId, int appType, int authType, String data);
 }

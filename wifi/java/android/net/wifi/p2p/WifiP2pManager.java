@@ -283,6 +283,13 @@ public class WifiP2pManager {
     public static final String EXTRA_HANDOVER_MESSAGE =
             "android.net.wifi.p2p.EXTRA_HANDOVER_MESSAGE";
 
+    /**
+     * The lookup key for a calling package returned by the WifiP2pService.
+     * @hide
+     */
+    public static final String CALLING_PACKAGE =
+            "android.net.wifi.p2p.CALLING_PACKAGE";
+
     IWifiP2pManager mService;
 
     private static final int BASE = Protocol.BASE_WIFI_P2P_MANAGER;
@@ -1271,7 +1278,10 @@ public class WifiP2pManager {
      */
     public void requestPeers(Channel c, PeerListListener listener) {
         checkChannel(c);
-        c.mAsyncChannel.sendMessage(REQUEST_PEERS, 0, c.putListener(listener));
+        Bundle callingPackage = new Bundle();
+        callingPackage.putString(CALLING_PACKAGE, c.mContext.getOpPackageName());
+        c.mAsyncChannel.sendMessage(REQUEST_PEERS, 0, c.putListener(listener),
+                callingPackage);
     }
 
     /**
@@ -1314,6 +1324,11 @@ public class WifiP2pManager {
             Channel c, WifiP2pWfdInfo wfdInfo,
             ActionListener listener) {
         checkChannel(c);
+        try {
+            mService.checkConfigureWifiDisplayPermission();
+        } catch (RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
         c.mAsyncChannel.sendMessage(SET_WFD_INFO, 0, c.putListener(listener), wfdInfo);
     }
 
@@ -1362,8 +1377,8 @@ public class WifiP2pManager {
     public void setMiracastMode(int mode) {
         try {
             mService.setMiracastMode(mode);
-        } catch(RemoteException e) {
-           // ignore
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
         }
     }
 
@@ -1378,7 +1393,7 @@ public class WifiP2pManager {
         try {
             return mService.getMessenger();
         } catch (RemoteException e) {
-            return null;
+            throw e.rethrowFromSystemServer();
         }
     }
 
@@ -1393,7 +1408,7 @@ public class WifiP2pManager {
         try {
             return mService.getP2pStateMachineMessenger();
         } catch (RemoteException e) {
-            return null;
+            throw e.rethrowFromSystemServer();
         }
     }
 

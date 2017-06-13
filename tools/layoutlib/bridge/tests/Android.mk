@@ -16,8 +16,6 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 
-LOCAL_JAVA_LANGUAGE_VERSION := 1.8
-
 # Only compile source java files in this lib.
 LOCAL_SRC_FILES := $(call all-java-files-under, src)
 LOCAL_JAVA_RESOURCE_DIRS := res
@@ -30,7 +28,7 @@ LOCAL_JAVA_LIBRARIES := layoutlib \
 			layoutlib_api-prebuilt \
 			tools-common-prebuilt \
 			sdk-common \
-			junit
+			junit-host
 
 include $(BUILD_HOST_JAVA_LIBRARY)
 

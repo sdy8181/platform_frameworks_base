@@ -17,13 +17,13 @@ startpage=true
 <h2>Dependencies and prerequisites</h2>
 
 <ul>
-  <li>Android 1.6 (API Level 4) or higher</li>
+  <li>Android 2.2 (API Level 8) or higher</li>
 </ul>
 
 </div>
 </div>
 
-<a class="notice-developers-video wide" href="https://developers.google.com/events/io/sessions/325304728">
+<a class="notice-developers-video wide" href="https://www.youtube.com/watch?v=yhv8l9F44qo">
 <div>
     <h3>Video</h3>
     <p>Volley: Easy, Fast Networking for Android</p>
@@ -42,7 +42,7 @@ faster. Volley is available through the open
 <li>Automatic scheduling of network requests.</li>
 <li>Multiple concurrent network connections.</li>
 <li>Transparent disk and memory response caching with standard HTTP
-<a href=http://en.wikipedia.org/wiki/Cache_coherence">cache coherence</a>.</li>
+<a href="http://en.wikipedia.org/wiki/Cache_coherence">cache coherence</a>.</li>
 <li>Support for request prioritization.</li>
 <li>Cancellation request API. You can cancel a single request, or you can set blocks or
 scopes of requests to cancel.</li>
@@ -66,21 +66,29 @@ alternative like {@link android.app.DownloadManager}.</p>
 <a href="https://android.googlesource.com/platform/frameworks/volley">AOSP</a>
 repository at {@code frameworks/volley} and contains the main request dispatch pipeline
 as well as a set of commonly applicable utilities, available in the Volley "toolbox." The
-easiest way to add Volley to your project is to clone the Volley repository and set it as
-a library project:</p>
+easiest way to add Volley to your project is to add the following dependency to your app's
+build.gradle file:
+
+<pre class="no-pretty-print">
+dependencies {
+    ...
+    compile 'com.android.volley:volley:1.0.0'
+}
+</pre>
+
+You can also clone the Volley repository and set it as a library project:</p>
 
 <ol>
 <li>Git clone the repository by typing the following at the command line:
 
-<pre>
+<pre class="no-pretty-print">
 git clone https://android.googlesource.com/platform/frameworks/volley
 </pre>
 </li>
 
-<li>Import the downloaded source into your app project as an Android library project
-(as described in <a href="{@docRoot}tools/projects/projects-eclipse.html">
-Managing Projects from Eclipse with ADT</a>, if you're using Eclipse) or make a
-<a href="{@docRoot}guide/faq/commontasks.html#addexternallibrary"><code>.jar</code> file</a>.</li>
+<li>Import the downloaded source into your app project as an Android library module
+as described in <a
+href="{@docRoot}studio/projects/android-library.html">Create an Android Library</a>.</li>
 </ol>
 
 <h2>Lessons</h2>

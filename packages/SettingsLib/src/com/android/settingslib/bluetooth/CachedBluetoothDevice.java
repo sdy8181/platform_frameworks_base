@@ -102,9 +102,6 @@ public final class CachedBluetoothDevice implements Comparable<CachedBluetoothDe
     private static final long MAX_UUID_DELAY_FOR_AUTO_CONNECT = 5000;
     private static final long MAX_HOGP_DELAY_FOR_AUTO_CONNECT = 30000;
 
-    /** Auto-connect after pairing only if locally initiated. */
-    private boolean mConnectAfterPairing;
-
     /**
      * Describes the current device and profile for logging.
      *
@@ -300,7 +297,6 @@ public final class CachedBluetoothDevice implements Comparable<CachedBluetoothDe
             return false;
         }
 
-        mConnectAfterPairing = true;  // auto-connect after pairing
         return true;
     }
 
@@ -309,7 +305,7 @@ public final class CachedBluetoothDevice implements Comparable<CachedBluetoothDe
      * slightly different for local vs. remote initiated pairing dialogs.
      */
     boolean isUserInitiatedPairing() {
-        return mConnectAfterPairing;
+        return mDevice.isBondingInitiatedLocally();
     }
 
     public void unpair() {
@@ -549,7 +545,6 @@ public final class CachedBluetoothDevice implements Comparable<CachedBluetoothDe
     void onBondingStateChanged(int bondState) {
         if (bondState == BluetoothDevice.BOND_NONE) {
             mProfiles.clear();
-            mConnectAfterPairing = false;  // cancel auto-connect
             setPhonebookPermissionChoice(ACCESS_UNKNOWN);
             setMessagePermissionChoice(ACCESS_UNKNOWN);
             setSimPermissionChoice(ACCESS_UNKNOWN);
@@ -562,10 +557,9 @@ public final class CachedBluetoothDevice implements Comparable<CachedBluetoothDe
         if (bondState == BluetoothDevice.BOND_BONDED) {
             if (mDevice.isBluetoothDock()) {
                 onBondingDockConnect();
-            } else if (mConnectAfterPairing) {
+            } else if (mDevice.isBondingInitiatedLocally()) {
                 connect(false);
             }
-            mConnectAfterPairing = false;
         }
     }
 
@@ -809,7 +803,9 @@ public final class CachedBluetoothDevice implements Comparable<CachedBluetoothDe
             // No separate prompt is displayed after pairing.
             if (getPhonebookPermissionChoice() == CachedBluetoothDevice.ACCESS_UNKNOWN) {
                 if (mDevice.getBluetoothClass().getDeviceClass()
-                        == BluetoothClass.Device.AUDIO_VIDEO_HANDSFREE) {
+                        == BluetoothClass.Device.AUDIO_VIDEO_HANDSFREE ||
+                    mDevice.getBluetoothClass().getDeviceClass()
+                        == BluetoothClass.Device.AUDIO_VIDEO_WEARABLE_HEADSET) {
                     setPhonebookPermissionChoice(CachedBluetoothDevice.ACCESS_ALLOWED);
                 } else {
                     setPhonebookPermissionChoice(CachedBluetoothDevice.ACCESS_REJECTED);
@@ -835,7 +831,7 @@ public final class CachedBluetoothDevice implements Comparable<CachedBluetoothDe
     public int getConnectionSummary() {
         boolean profileConnected = false;       // at least one profile is connected
         boolean a2dpNotConnected = false;       // A2DP is preferred but not connected
-        boolean headsetNotConnected = false;    // Headset is preferred but not connected
+        boolean hfpNotConnected = false;    // HFP is preferred but not connected
 
         for (LocalBluetoothProfile profile : getProfiles()) {
             int connectionStatus = getProfileConnectionState(profile);
@@ -851,11 +847,12 @@ public final class CachedBluetoothDevice implements Comparable<CachedBluetoothDe
 
                 case BluetoothProfile.STATE_DISCONNECTED:
                     if (profile.isProfileReady()) {
-                        if ((profile instanceof A2dpProfile)||
+                        if ((profile instanceof A2dpProfile) ||
                             (profile instanceof A2dpSinkProfile)){
                             a2dpNotConnected = true;
-                        } else if (profile instanceof HeadsetProfile) {
-                            headsetNotConnected = true;
+                        } else if ((profile instanceof HeadsetProfile) ||
+                                   (profile instanceof HfpClientProfile)) {
+                            hfpNotConnected = true;
                         }
                     }
                     break;
@@ -863,11 +860,11 @@ public final class CachedBluetoothDevice implements Comparable<CachedBluetoothDe
         }
 
         if (profileConnected) {
-            if (a2dpNotConnected && headsetNotConnected) {
+            if (a2dpNotConnected && hfpNotConnected) {
                 return R.string.bluetooth_connected_no_headset_no_a2dp;
             } else if (a2dpNotConnected) {
                 return R.string.bluetooth_connected_no_a2dp;
-            } else if (headsetNotConnected) {
+            } else if (hfpNotConnected) {
                 return R.string.bluetooth_connected_no_headset;
             } else {
                 return R.string.bluetooth_connected;

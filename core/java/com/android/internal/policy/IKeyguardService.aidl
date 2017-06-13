@@ -28,13 +28,14 @@ oneway interface IKeyguardService {
      * FLAG_SHOW_ON_LOCK_SCREEN.
      *
      * @param isOccluded Whether the Keyguard is occluded by another window.
+     * @param animate Whether to play an animation for the state change.
      */
-    void setOccluded(boolean isOccluded);
+    void setOccluded(boolean isOccluded, boolean animate);
 
     void addStateMonitorCallback(IKeyguardStateCallback callback);
     void verifyUnlock(IKeyguardExitCallback callback);
     void keyguardDone(boolean authenticated, boolean wakeup);
-    void dismiss();
+    void dismiss(boolean allowWhileOccluded);
     void onDreamingStarted();
     void onDreamingStopped();
 
@@ -50,9 +51,12 @@ oneway interface IKeyguardService {
      * Called when the device has finished going to sleep.
      *
      * @param why {@link #OFF_BECAUSE_OF_USER}, {@link #OFF_BECAUSE_OF_ADMIN},
-     * or {@link #OFF_BECAUSE_OF_TIMEOUT}.
+     *            or {@link #OFF_BECAUSE_OF_TIMEOUT}.
+     * @param cameraGestureTriggered whether the camera gesture was triggered between
+     *                               {@link #onStartedGoingToSleep} and this method; if it's been
+     *                               triggered, we shouldn't lock the device.
      */
-    void onFinishedGoingToSleep(int reason);
+    void onFinishedGoingToSleep(int reason, boolean cameraGestureTriggered);
 
     /**
      * Called when the device has started waking up.

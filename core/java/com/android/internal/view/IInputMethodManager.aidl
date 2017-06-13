@@ -16,11 +16,13 @@
 
 package com.android.internal.view;
 
+import android.net.Uri;
 import android.os.ResultReceiver;
 import android.text.style.SuggestionSpan;
 import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodSubtype;
 import android.view.inputmethod.EditorInfo;
+import com.android.internal.inputmethod.IInputContentUriToken;
 import com.android.internal.view.InputBindResult;
 import com.android.internal.view.IInputContext;
 import com.android.internal.view.IInputMethodClient;
@@ -45,19 +47,20 @@ interface IInputMethodManager {
     void addClient(in IInputMethodClient client,
             in IInputContext inputContext, int uid, int pid);
     void removeClient(in IInputMethodClient client);
-            
-    InputBindResult startInput(in IInputMethodClient client,
-            IInputContext inputContext, in EditorInfo attribute, int controlFlags);
+
     void finishInput(in IInputMethodClient client);
     boolean showSoftInput(in IInputMethodClient client, int flags,
             in ResultReceiver resultReceiver);
     boolean hideSoftInput(in IInputMethodClient client, int flags,
             in ResultReceiver resultReceiver);
-    // Report that a window has gained focus.  If 'attribute' is non-null,
-    // this will also do a startInput.
-    InputBindResult windowGainedFocus(in IInputMethodClient client, in IBinder windowToken,
-            int controlFlags, int softInputMode, int windowFlags,
-            in EditorInfo attribute, IInputContext inputContext);
+    // If windowToken is null, this just does startInput().  Otherwise this reports that a window
+    // has gained focus, and if 'attribute' is non-null then also does startInput.
+    InputBindResult startInputOrWindowGainedFocus(
+            /* @InputMethodClient.StartInputReason */ int startInputReason,
+            in IInputMethodClient client, in IBinder windowToken, int controlFlags,
+            int softInputMode, int windowFlags, in EditorInfo attribute,
+            IInputContext inputContext,
+            /* @InputConnectionInspector.MissingMethodFlags */ int missingMethodFlags);
 
     void showInputMethodPickerFromClient(in IInputMethodClient client,
             int auxiliarySubtypeMode);
@@ -78,5 +81,10 @@ interface IInputMethodManager {
     boolean setInputMethodEnabled(String id, boolean enabled);
     void setAdditionalInputMethodSubtypes(String id, in InputMethodSubtype[] subtypes);
     int getInputMethodWindowVisibleHeight();
+    void clearLastInputMethodWindowForTransition(in IBinder token);
+
+    IInputContentUriToken createInputContentUriToken(in IBinder token, in Uri contentUri,
+            in String packageName);
+
     oneway void notifyUserAction(int sequenceNumber);
 }

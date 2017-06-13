@@ -32,7 +32,6 @@ import junit.framework.TestSuite;
 import junit.framework.TestListener;
 import junit.framework.Test;
 import junit.framework.TestResult;
-import com.google.android.collect.Lists;
 
 /**
  * Support class that actually runs a test. Android uses this class,
@@ -42,6 +41,7 @@ import com.google.android.collect.Lists;
  *
  * {@hide} Not needed for 1.0 SDK.
  */
+@Deprecated
 public class TestRunner implements PerformanceTestCase.Intermediates {
     public static final int REGRESSION = 0;
     public static final int PERFORMANCE = 1;
@@ -53,7 +53,7 @@ public class TestRunner implements PerformanceTestCase.Intermediates {
 
     private int mMode = REGRESSION;
 
-    private List<Listener> mListeners = Lists.newArrayList();
+    private List<Listener> mListeners = new ArrayList<>();
     private int mPassed;
     private int mFailed;
 

@@ -44,10 +44,11 @@ import com.android.internal.net.VpnProfile;
 interface IConnectivityManager
 {
     Network getActiveNetwork();
+    Network getActiveNetworkForUid(int uid, boolean ignoreBlocked);
     NetworkInfo getActiveNetworkInfo();
-    NetworkInfo getActiveNetworkInfoForUid(int uid);
+    NetworkInfo getActiveNetworkInfoForUid(int uid, boolean ignoreBlocked);
     NetworkInfo getNetworkInfo(int networkType);
-    NetworkInfo getNetworkInfoForNetwork(in Network network);
+    NetworkInfo getNetworkInfoForUid(in Network network, int uid, boolean ignoreBlocked);
     NetworkInfo[] getAllNetworkInfo();
     Network getNetworkForType(int networkType);
     Network[] getAllNetworks();
@@ -68,13 +69,18 @@ interface IConnectivityManager
 
     boolean requestRouteToHostAddress(int networkType, in byte[] hostAddress);
 
-    int tether(String iface);
+    int tether(String iface, String callerPkg);
 
-    int untether(String iface);
+    int untether(String iface, String callerPkg);
 
     int getLastTetherError(String iface);
 
     boolean isTetheringSupported();
+
+    void startTethering(int type, in ResultReceiver receiver, boolean showProvisioningUi,
+            String callerPkg);
+
+    void stopTethering(int type, String callerPkg);
 
     String[] getTetherableIfaces();
 
@@ -90,7 +96,7 @@ interface IConnectivityManager
 
     String[] getTetherableBluetoothRegexs();
 
-    int setUsbTethering(boolean enable);
+    int setUsbTethering(boolean enable, String callerPkg);
 
     void reportInetCondition(int networkType, int percentage);
 
@@ -117,6 +123,8 @@ interface IConnectivityManager
     VpnInfo[] getAllVpnInfo();
 
     boolean updateLockdownVpn();
+    boolean setAlwaysOnVpnPackage(int userId, String packageName, boolean lockdown);
+    String getAlwaysOnVpnPackage(int userId);
 
     int checkMobileProvisioning(int suggestedTimeOutMs);
 
@@ -152,6 +160,10 @@ interface IConnectivityManager
     void releaseNetworkRequest(in NetworkRequest networkRequest);
 
     void setAcceptUnvalidated(in Network network, boolean accept, boolean always);
+    void setAvoidUnvalidated(in Network network);
+    void startCaptivePortalApp(in Network network);
+
+    int getMultipathPreference(in Network Network);
 
     int getRestoreDefaultNetworkDelay(int networkType);
 
@@ -165,4 +177,6 @@ interface IConnectivityManager
             in IBinder binder, String srcAddr, int srcPort, String dstAddr);
 
     void stopKeepalive(in Network network, int slot);
+
+    String getCaptivePortalServerUrl();
 }

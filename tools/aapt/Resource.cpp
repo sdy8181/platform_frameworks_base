@@ -23,12 +23,8 @@
 // STATUST: mingw does seem to redefine UNKNOWN_ERROR from our enum value, so a cast is necessary.
 
 #if !defined(_WIN32)
-#  define ZD "%zd"
-#  define ZD_TYPE ssize_t
 #  define STATUST(x) x
 #else
-#  define ZD "%ld"
-#  define ZD_TYPE long
 #  define STATUST(x) (status_t)x
 #endif
 
@@ -326,13 +322,18 @@ static status_t makeFileResources(Bundle* bundle, const sp<AaptAssets>& assets,
         }
         String8 resPath = it.getPath();
         resPath.convertToResPath();
-        table->addEntry(SourcePos(it.getPath(), 0), String16(assets->getPackage()),
+        status_t result = table->addEntry(SourcePos(it.getPath(), 0),
+                        String16(assets->getPackage()),
                         type16,
                         baseName,
                         String16(resPath),
                         NULL,
                         &it.getParams());
-        assets->addResource(it.getLeafName(), resPath, it.getFile(), type8);
+        if (result != NO_ERROR) {
+            hasErrors = true;
+        } else {
+            assets->addResource(it.getLeafName(), resPath, it.getFile(), type8);
+        }
     }
 
     return hasErrors ? STATUST(UNKNOWN_ERROR) : NO_ERROR;
@@ -394,7 +395,7 @@ static void collect_files(const sp<AaptDir>& dir,
     const DefaultKeyedVector<String8, sp<AaptGroup> >& groups = dir->getFiles();
     int N = groups.size();
     for (int i=0; i<N; i++) {
-        String8 leafName = groups.keyAt(i);
+        const String8& leafName = groups.keyAt(i);
         const sp<AaptGroup>& group = groups.valueAt(i);
 
         const DefaultKeyedVector<AaptGroupEntry, sp<AaptFile> >& files
@@ -417,7 +418,7 @@ static void collect_files(const sp<AaptDir>& dir,
             set->add(leafName, group);
             resources->add(resType, set);
         } else {
-            sp<ResourceTypeSet> set = resources->valueAt(index);
+            const sp<ResourceTypeSet>& set = resources->valueAt(index);
             index = set->indexOfKey(leafName);
             if (index < 0) {
                 if (kIsDebug) {
@@ -452,7 +453,7 @@ static void collect_files(const sp<AaptAssets>& ass,
     int N = dirs.size();
 
     for (int i=0; i<N; i++) {
-        sp<AaptDir> d = dirs.itemAt(i);
+        const sp<AaptDir>& d = dirs.itemAt(i);
         if (kIsDebug) {
             printf("Collecting dir #%d %p: %s, leaf %s\n", i, d.get(), d->getPath().string(),
                     d->getLeaf().string());
@@ -610,7 +611,7 @@ static bool applyFileOverlay(Bundle *bundle,
         // get the overlay resources of the requested type
         ssize_t index = overlayRes->indexOfKey(resTypeString);
         if (index >= 0) {
-            sp<ResourceTypeSet> overlaySet = overlayRes->valueAt(index);
+            const sp<ResourceTypeSet>& overlaySet = overlayRes->valueAt(index);
 
             // for each of the resources, check for a match in the previously built
             // non-overlay "baseset".
@@ -760,7 +761,7 @@ bool addTagAttribute(const sp<XMLNode>& node, const char* ns8,
     return addTagAttribute(node, ns8, attr8, value, errorOnFailedInsert, false);
 }
 
-static void fullyQualifyClassName(const String8& package, sp<XMLNode> node,
+static void fullyQualifyClassName(const String8& package, const sp<XMLNode>& node,
         const String16& attrName) {
     XMLNode::attribute_entry* attr = node->editAttribute(
             String16("http://schemas.android.com/apk/res/android"), attrName);
@@ -1028,7 +1029,6 @@ static ssize_t extractPlatformBuildVersion(AssetManager& assets, Bundle* bundle)
         return NO_ERROR;
     }
 
-    ResXMLTree tree;
     Asset* asset = assets.openNonAsset(cookie, "AndroidManifest.xml", Asset::ACCESS_STREAMING);
     if (asset == NULL) {
         fprintf(stderr, "ERROR: Platform AndroidManifest.xml not found\n");
@@ -1036,11 +1036,17 @@ static ssize_t extractPlatformBuildVersion(AssetManager& assets, Bundle* bundle)
     }
 
     ssize_t result = NO_ERROR;
-    if (tree.setTo(asset->getBuffer(true), asset->getLength()) != NO_ERROR) {
-        fprintf(stderr, "ERROR: Platform AndroidManifest.xml is corrupt\n");
-        result = UNKNOWN_ERROR;
-    } else {
-        result = extractPlatformBuildVersion(tree, bundle);
+
+    // Create a new scope so that ResXMLTree is destroyed before we delete the memory over
+    // which it iterates (asset).
+    {
+        ResXMLTree tree;
+        if (tree.setTo(asset->getBuffer(true), asset->getLength()) != NO_ERROR) {
+            fprintf(stderr, "ERROR: Platform AndroidManifest.xml is corrupt\n");
+            result = UNKNOWN_ERROR;
+        } else {
+            result = extractPlatformBuildVersion(tree, bundle);
+        }
     }
 
     delete asset;
@@ -1159,6 +1165,12 @@ status_t buildResources(Bundle* bundle, const sp<AaptAssets>& assets, sp<ApkBuil
 
     if (kIsDebug) {
         printf("Creating resources for package %s\n", assets->getPackage().string());
+    }
+
+    // Set the private symbols package if it was declared.
+    // This can also be declared in XML as <private-symbols name="package" />
+    if (bundle->getPrivateSymbolsPackage().size() != 0) {
+        assets->setSymbolsPrivatePackage(bundle->getPrivateSymbolsPackage());
     }
 
     ResourceTable::PackageType packageType = ResourceTable::App;
@@ -1339,7 +1351,7 @@ status_t buildResources(Bundle* bundle, const sp<AaptAssets>& assets, sp<ApkBuil
             ResourceDirIterator it(resources->valueAt(index), String8("values"));
             ssize_t res;
             while ((res=it.next()) == NO_ERROR) {
-                sp<AaptFile> file = it.getFile();
+                const sp<AaptFile>& file = it.getFile();
                 res = compileResourceFile(bundle, assets, file, it.getParams(), 
                                           (current!=assets), &table);
                 if (res != NO_ERROR) {
@@ -1362,6 +1374,10 @@ status_t buildResources(Bundle* bundle, const sp<AaptAssets>& assets, sp<ApkBuil
         if (err != NO_ERROR) {
             hasErrors = true;
         }
+    }
+
+    if (hasErrors) {
+        return UNKNOWN_ERROR;
     }
 
     // --------------------------------------------------------------------
@@ -1537,12 +1553,20 @@ status_t buildResources(Bundle* bundle, const sp<AaptAssets>& assets, sp<ApkBuil
     std::queue<CompileResourceWorkItem>& workQueue = table.getWorkQueue();
     while (!workQueue.empty()) {
         CompileResourceWorkItem& workItem = workQueue.front();
-        err = compileXmlFile(bundle, assets, workItem.resourceName, workItem.file, &table, xmlFlags);
+        int xmlCompilationFlags = xmlFlags | XML_COMPILE_PARSE_VALUES
+                | XML_COMPILE_ASSIGN_ATTRIBUTE_IDS;
+        if (!workItem.needsCompiling) {
+            xmlCompilationFlags &= ~XML_COMPILE_ASSIGN_ATTRIBUTE_IDS;
+            xmlCompilationFlags &= ~XML_COMPILE_PARSE_VALUES;
+        }
+        err = compileXmlFile(bundle, assets, workItem.resourceName, workItem.xmlRoot,
+                             workItem.file, &table, xmlCompilationFlags);
+
         if (err == NO_ERROR) {
             assets->addResource(workItem.resPath.getPathLeaf(),
-                    workItem.resPath,
-                    workItem.file,
-                    workItem.file->getResourceType());
+                                workItem.resPath,
+                                workItem.file,
+                                workItem.file->getResourceType());
         } else {
             hasErrors = true;
         }
@@ -1737,9 +1761,7 @@ status_t buildResources(Bundle* bundle, const sp<AaptAssets>& assets, sp<ApkBuil
             manifestFile->getGroupEntry(),
             manifestFile->getResourceType());
     err = compileXmlFile(bundle, assets, String16(), manifestFile,
-            outManifestFile, &table,
-            XML_COMPILE_ASSIGN_ATTRIBUTE_IDS
-            | XML_COMPILE_STRIP_WHITESPACE | XML_COMPILE_STRIP_RAW_VALUES);
+            outManifestFile, &table, XML_COMPILE_STANDARD_RESOURCE & ~XML_COMPILE_STRIP_COMMENTS);
     if (err < NO_ERROR) {
         return err;
     }
@@ -1871,8 +1893,6 @@ status_t buildResources(Bundle* bundle, const sp<AaptAssets>& assets, sp<ApkBuil
                     //printf("Comment of %s: %s\n", String8(e).string(),
                     //        String8(cmt).string());
                     syms->appendComment(String8(e), String16(cmt), srcPos);
-                } else {
-                    //printf("No comment for %s\n", String8(e).string());
                 }
                 syms->makeSymbolPublic(String8(e), srcPos);
             } else if (strcmp16(block.getElementName(&len), uses_permission16.string()) == 0) {
@@ -2120,7 +2140,7 @@ static status_t writeResourceLoadedCallback(
     size_t N = symbols->getSymbols().size();
     for (i=0; i<N; i++) {
         const AaptSymbolEntry& sym = symbols->getSymbols().valueAt(i);
-        if (sym.typeCode == AaptSymbolEntry::TYPE_UNKNOWN) {
+        if (sym.typeCode != AaptSymbolEntry::TYPE_INT32) {
             continue;
         }
         if (!assets->isJavaSymbol(sym, includePrivate)) {
@@ -2244,6 +2264,9 @@ static status_t writeLayoutClasses(
                 String16 comment(sym.comment);
                 if (comment.size() <= 0) {
                     comment = getAttributeComment(assets, name8);
+                }
+                if (comment.contains(u"@removed")) {
+                    continue;
                 }
                 if (comment.size() > 0) {
                     const char16_t* p = comment.string();
@@ -2523,10 +2546,6 @@ static status_t writeSymbolClass(
             fprintf(fp,
                     "%s/** %s\n",
                     getIndentSpace(indent), cmt.string());
-        } else if (sym.isPublic && !includePrivate) {
-            sym.sourcePos.warning("No comment for public symbol %s:%s/%s",
-                assets->getPackage().string(), className.string(),
-                String8(sym.name).string());
         }
         String16 typeComment(sym.typeComment);
         if (typeComment.size() > 0) {
@@ -2569,10 +2588,6 @@ static status_t writeSymbolClass(
                      "%s */\n",
                     getIndentSpace(indent), cmt.string(),
                     getIndentSpace(indent));
-        } else if (sym.isPublic && !includePrivate) {
-            sym.sourcePos.warning("No comment for public symbol %s:%s/%s",
-                assets->getPackage().string(), className.string(),
-                String8(sym.name).string());
         }
         ann.printAnnotations(fp, getIndentSpace(indent));
         fprintf(fp, "%spublic static final String %s=\"%s\";\n",
@@ -2674,7 +2689,7 @@ status_t writeResourceSymbols(Bundle* bundle, const sp<AaptAssets>& assets,
         String8 dest(bundle->getRClassDir());
 
         if (bundle->getMakePackageDirs()) {
-            String8 pkg(package);
+            const String8& pkg(package);
             const char* last = pkg.string();
             const char* s = last-1;
             do {

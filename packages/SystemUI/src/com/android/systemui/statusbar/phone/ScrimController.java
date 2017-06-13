@@ -22,18 +22,20 @@ import android.animation.PropertyValuesHolder;
 import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.Interpolator;
 import android.view.animation.PathInterpolator;
 
+import com.android.keyguard.KeyguardUpdateMonitor;
 import com.android.systemui.R;
-import com.android.systemui.statusbar.BackDropView;
 import com.android.systemui.statusbar.ExpandableNotificationRow;
 import com.android.systemui.statusbar.NotificationData;
 import com.android.systemui.statusbar.ScrimView;
-import com.android.systemui.statusbar.policy.HeadsUpManager;
+import com.android.systemui.statusbar.policy.OnHeadsUpChangedListener;
 import com.android.systemui.statusbar.stack.StackStateAnimator;
 
 /**
@@ -41,30 +43,37 @@ import com.android.systemui.statusbar.stack.StackStateAnimator;
  * security method gets shown).
  */
 public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
-        HeadsUpManager.OnHeadsUpChangedListener {
+        OnHeadsUpChangedListener {
     public static final long ANIMATION_DURATION = 220;
     public static final Interpolator KEYGUARD_FADE_OUT_INTERPOLATOR
             = new PathInterpolator(0f, 0, 0.7f, 1f);
-
+    public static final Interpolator KEYGUARD_FADE_OUT_INTERPOLATOR_LOCKED
+            = new PathInterpolator(0.3f, 0f, 0.8f, 1f);
     private static final float SCRIM_BEHIND_ALPHA = 0.62f;
-    private static final float SCRIM_BEHIND_ALPHA_KEYGUARD = 0.45f;
-    private static final float SCRIM_BEHIND_ALPHA_UNLOCKING = 0.2f;
+    protected static final float SCRIM_BEHIND_ALPHA_KEYGUARD = 0.45f;
+    protected static final float SCRIM_BEHIND_ALPHA_UNLOCKING = 0.2f;
     private static final float SCRIM_IN_FRONT_ALPHA = 0.75f;
+    private static final float SCRIM_IN_FRONT_ALPHA_LOCKED = 0.85f;
     private static final int TAG_KEY_ANIM = R.id.scrim;
     private static final int TAG_KEY_ANIM_TARGET = R.id.scrim_target;
-    private static final int TAG_HUN_START_ALPHA = R.id.hun_scrim_alpha_start;
-    private static final int TAG_HUN_END_ALPHA = R.id.hun_scrim_alpha_end;
+    private static final int TAG_START_ALPHA = R.id.scrim_alpha_start;
+    private static final int TAG_END_ALPHA = R.id.scrim_alpha_end;
 
-    private final ScrimView mScrimBehind;
+    protected final ScrimView mScrimBehind;
     private final ScrimView mScrimInFront;
     private final UnlockMethodCache mUnlockMethodCache;
     private final View mHeadsUpScrim;
+    private final KeyguardUpdateMonitor mKeyguardUpdateMonitor;
 
-    private boolean mKeyguardShowing;
+    private float mScrimBehindAlpha = SCRIM_BEHIND_ALPHA;
+    private float mScrimBehindAlphaKeyguard = SCRIM_BEHIND_ALPHA_KEYGUARD;
+    private float mScrimBehindAlphaUnlocking = SCRIM_BEHIND_ALPHA_UNLOCKING;
+
+    protected boolean mKeyguardShowing;
     private float mFraction;
 
     private boolean mDarkenWhileDragging;
-    private boolean mBouncerShowing;
+    protected boolean mBouncerShowing;
     private boolean mWakeAndUnlocking;
     private boolean mAnimateChange;
     private boolean mUpdatePending;
@@ -74,8 +83,6 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
     private long mAnimationDelay;
     private Runnable mOnAnimationFinished;
     private final Interpolator mInterpolator = new DecelerateInterpolator();
-    private BackDropView mBackDropView;
-    private boolean mScrimSrcEnabled;
     private boolean mDozing;
     private float mDozeInFrontAlpha;
     private float mDozeBehindAlpha;
@@ -88,20 +95,41 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
     private boolean mForceHideScrims;
     private boolean mSkipFirstFrame;
     private boolean mDontAnimateBouncerChanges;
+    private boolean mKeyguardFadingOutInProgress;
+    private ValueAnimator mKeyguardFadeoutAnimation;
 
-    public ScrimController(ScrimView scrimBehind, ScrimView scrimInFront, View headsUpScrim,
-            boolean scrimSrcEnabled) {
+    public ScrimController(ScrimView scrimBehind, ScrimView scrimInFront, View headsUpScrim) {
         mScrimBehind = scrimBehind;
         mScrimInFront = scrimInFront;
         mHeadsUpScrim = headsUpScrim;
         final Context context = scrimBehind.getContext();
         mUnlockMethodCache = UnlockMethodCache.getInstance(context);
-        mScrimSrcEnabled = scrimSrcEnabled;
+        mKeyguardUpdateMonitor = KeyguardUpdateMonitor.getInstance(context);
         updateHeadsUpScrim(false);
     }
 
     public void setKeyguardShowing(boolean showing) {
         mKeyguardShowing = showing;
+        scheduleUpdate();
+    }
+
+    public void setShowScrimBehind(boolean show) {
+        if (show) {
+            mScrimBehindAlpha = SCRIM_BEHIND_ALPHA;
+            mScrimBehindAlphaKeyguard = SCRIM_BEHIND_ALPHA_KEYGUARD;
+            mScrimBehindAlphaUnlocking = SCRIM_BEHIND_ALPHA_UNLOCKING;
+        } else {
+            mScrimBehindAlpha = 0;
+            mScrimBehindAlphaKeyguard = 0;
+            mScrimBehindAlphaUnlocking = 0;
+        }
+        scheduleUpdate();
+    }
+
+    protected void setScrimBehindValues(float scrimBehindAlphaKeyguard,
+            float scrimBehindAlphaUnlocking) {
+        mScrimBehindAlphaKeyguard = scrimBehindAlphaKeyguard;
+        mScrimBehindAlphaUnlocking = scrimBehindAlphaUnlocking;
         scheduleUpdate();
     }
 
@@ -120,6 +148,9 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
             scheduleUpdate();
             if (mPinnedHeadsUpCount != 0) {
                 updateHeadsUpScrim(false);
+            }
+            if (mKeyguardFadeoutAnimation != null) {
+                mKeyguardFadeoutAnimation.cancel();
             }
         }
     }
@@ -144,11 +175,19 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
         mAnimateChange = true;
         mSkipFirstFrame = skipFirstFrame;
         mOnAnimationFinished = onAnimationFinished;
-        scheduleUpdate();
 
-        // No need to wait for the next frame to be drawn for this case - onPreDraw will execute
-        // the changes we just scheduled.
-        onPreDraw();
+        if (!mKeyguardUpdateMonitor.needsSlowUnlockTransition()) {
+            scheduleUpdate();
+
+            // No need to wait for the next frame to be drawn for this case - onPreDraw will execute
+            // the changes we just scheduled.
+            onPreDraw();
+        } else {
+
+            // In case the user isn't unlocked, make sure to delay a bit because the system is hosed
+            // with too many things in this case, in order to not skip the initial frames.
+            mScrimInFront.postOnAnimationDelayed(this::scheduleUpdate, 16);
+        }
     }
 
     public void abortKeyguardFadingOut() {
@@ -157,11 +196,23 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
         }
     }
 
+    public void animateKeyguardUnoccluding(long duration) {
+        mAnimateChange = false;
+        setScrimBehindColor(0f);
+        mAnimateChange = true;
+        scheduleUpdate();
+        mDurationOverride = duration;
+    }
+
     public void animateGoingToFullShade(long delay, long duration) {
         mDurationOverride = duration;
         mAnimationDelay = delay;
         mAnimateChange = true;
         scheduleUpdate();
+    }
+
+    public void animateNextChange() {
+        mAnimateChange = true;
     }
 
     public void setDozing(boolean dozing) {
@@ -189,6 +240,11 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
         return mDozeInFrontAlpha;
     }
 
+    private float getScrimInFrontAlpha() {
+        return mKeyguardUpdateMonitor.needsSlowUnlockTransition()
+                ? SCRIM_IN_FRONT_ALPHA_LOCKED
+                : SCRIM_IN_FRONT_ALPHA;
+    }
     private void scheduleUpdate() {
         if (mUpdatePending) return;
 
@@ -198,7 +254,7 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
         mUpdatePending = true;
     }
 
-    private void updateScrims() {
+    protected void updateScrims() {
         if (mAnimateKeyguardFadingOut || mForceHideScrims) {
             setScrimInFrontColor(0f);
             setScrimBehindColor(0f);
@@ -228,17 +284,17 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
             float fraction = 1 - behindFraction;
             fraction = (float) Math.pow(fraction, 0.8f);
             behindFraction = (float) Math.pow(behindFraction, 0.8f);
-            setScrimInFrontColor(fraction * SCRIM_IN_FRONT_ALPHA);
-            setScrimBehindColor(behindFraction * SCRIM_BEHIND_ALPHA_KEYGUARD);
+            setScrimInFrontColor(fraction * getScrimInFrontAlpha());
+            setScrimBehindColor(behindFraction * mScrimBehindAlphaKeyguard);
         } else if (mBouncerShowing) {
-            setScrimInFrontColor(SCRIM_IN_FRONT_ALPHA);
+            setScrimInFrontColor(getScrimInFrontAlpha());
             setScrimBehindColor(0f);
         } else {
             float fraction = Math.max(0, Math.min(mFraction, 1));
             setScrimInFrontColor(0f);
             setScrimBehindColor(fraction
-                    * (SCRIM_BEHIND_ALPHA_KEYGUARD - SCRIM_BEHIND_ALPHA_UNLOCKING)
-                    + SCRIM_BEHIND_ALPHA_UNLOCKING);
+                    * (mScrimBehindAlphaKeyguard - mScrimBehindAlphaUnlocking)
+                    + mScrimBehindAlphaUnlocking);
         }
     }
 
@@ -251,7 +307,7 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
         } else {
             // woo, special effects
             final float k = (float)(1f-0.5f*(1f-Math.cos(3.14159f * Math.pow(1f-frac, 2f))));
-            setScrimBehindColor(k * SCRIM_BEHIND_ALPHA);
+            setScrimBehindColor(k * mScrimBehindAlpha);
         }
     }
 
@@ -271,21 +327,7 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
     }
 
     private void setScrimColor(View scrim, float alpha) {
-        ValueAnimator runningAnim = (ValueAnimator) scrim.getTag(TAG_KEY_ANIM);
-        Float target = (Float) scrim.getTag(TAG_KEY_ANIM_TARGET);
-        if (runningAnim != null && target != null) {
-            if (alpha != target) {
-                runningAnim.cancel();
-            } else {
-                return;
-            }
-        }
-        if (mAnimateChange) {
-            startScrimAnimation(scrim, alpha);
-        } else {
-            setCurrentScrimAlpha(scrim, alpha);
-            updateScrimColor(scrim);
-        }
+        updateScrim(mAnimateChange, scrim, alpha, getCurrentScrimAlpha(scrim));
     }
 
     private float getDozeAlpha(View scrim) {
@@ -314,6 +356,7 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
         if (scrim instanceof ScrimView) {
             float alpha2 = getDozeAlpha(scrim);
             float alpha = 1 - (1 - alpha1) * (1 - alpha2);
+            alpha = Math.max(0, Math.min(1.0f, alpha));
             ((ScrimView) scrim).setScrimColor(Color.argb((int) (alpha * 255), 0, 0, 0));
         } else {
             scrim.setAlpha(alpha1);
@@ -341,11 +384,19 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
                     mOnAnimationFinished.run();
                     mOnAnimationFinished = null;
                 }
+                if (mKeyguardFadingOutInProgress) {
+                    mKeyguardFadeoutAnimation = null;
+                    mKeyguardFadingOutInProgress = false;
+                }
                 scrim.setTag(TAG_KEY_ANIM, null);
                 scrim.setTag(TAG_KEY_ANIM_TARGET, null);
             }
         });
         anim.start();
+        if (mAnimateKeyguardFadingOut) {
+            mKeyguardFadingOutInProgress = true;
+            mKeyguardFadeoutAnimation = anim;
+        }
         if (mSkipFirstFrame) {
             anim.setCurrentPlayTime(16);
         }
@@ -354,7 +405,13 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
     }
 
     private Interpolator getInterpolator() {
-        return mAnimateKeyguardFadingOut ? KEYGUARD_FADE_OUT_INTERPOLATOR : mInterpolator;
+        if (mAnimateKeyguardFadingOut && mKeyguardUpdateMonitor.needsSlowUnlockTransition()) {
+            return KEYGUARD_FADE_OUT_INTERPOLATOR_LOCKED;
+        } else if (mAnimateKeyguardFadingOut) {
+            return KEYGUARD_FADE_OUT_INTERPOLATOR;
+        } else {
+            return mInterpolator;
+        }
     }
 
     @Override
@@ -376,10 +433,12 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
 
     private void endAnimateKeyguardFadingOut(boolean force) {
         mAnimateKeyguardFadingOut = false;
-        if ((force || (!isAnimating(mScrimInFront) && !isAnimating(mScrimBehind)))
-                && mOnAnimationFinished != null) {
-            mOnAnimationFinished.run();
-            mOnAnimationFinished = null;
+        if (force || (!isAnimating(mScrimInFront) && !isAnimating(mScrimBehind))) {
+            if (mOnAnimationFinished != null) {
+                mOnAnimationFinished.run();
+                mOnAnimationFinished = null;
+            }
+            mKeyguardFadingOutInProgress = false;
         }
     }
 
@@ -387,19 +446,7 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
         return scrim.getTag(TAG_KEY_ANIM) != null;
     }
 
-    public void setBackDropView(BackDropView backDropView) {
-        mBackDropView = backDropView;
-        mBackDropView.setOnVisibilityChangedRunnable(new Runnable() {
-            @Override
-            public void run() {
-                updateScrimBehindDrawingMode();
-            }
-        });
-        updateScrimBehindDrawingMode();
-    }
-
-    private void updateScrimBehindDrawingMode() {
-        boolean asSrc = mBackDropView.getVisibility() != View.VISIBLE && mScrimSrcEnabled;
+    public void setDrawBehindAsSrc(boolean asSrc) {
         mScrimBehind.setDrawAsSrc(asSrc);
     }
 
@@ -428,41 +475,49 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
     }
 
     private void updateHeadsUpScrim(boolean animate) {
-        float alpha = calculateHeadsUpAlpha();
-        ValueAnimator previousAnimator = StackStateAnimator.getChildTag(mHeadsUpScrim,
+        updateScrim(animate, mHeadsUpScrim, calculateHeadsUpAlpha(), mCurrentHeadsUpAlpha);
+    }
+
+    private void updateScrim(boolean animate, View scrim, float alpha, float currentAlpha) {
+        if (mKeyguardFadingOutInProgress) {
+            return;
+        }
+
+        ValueAnimator previousAnimator = StackStateAnimator.getChildTag(scrim,
                 TAG_KEY_ANIM);
         float animEndValue = -1;
         if (previousAnimator != null) {
-            if (animate || alpha == mCurrentHeadsUpAlpha) {
+            if (animate || alpha == currentAlpha) {
                 previousAnimator.cancel();
             } else {
-                animEndValue = StackStateAnimator.getChildTag(mHeadsUpScrim, TAG_HUN_END_ALPHA);
+                animEndValue = StackStateAnimator.getChildTag(scrim, TAG_END_ALPHA);
             }
         }
-        if (alpha != mCurrentHeadsUpAlpha && alpha != animEndValue) {
+        if (alpha != currentAlpha && alpha != animEndValue) {
             if (animate) {
-                startScrimAnimation(mHeadsUpScrim, alpha);
-                mHeadsUpScrim.setTag(TAG_HUN_START_ALPHA, mCurrentHeadsUpAlpha);
-                mHeadsUpScrim.setTag(TAG_HUN_END_ALPHA, alpha);
+                startScrimAnimation(scrim, alpha);
+                scrim.setTag(TAG_START_ALPHA, currentAlpha);
+                scrim.setTag(TAG_END_ALPHA, alpha);
             } else {
                 if (previousAnimator != null) {
-                    float previousStartValue = StackStateAnimator.getChildTag(mHeadsUpScrim,
-                            TAG_HUN_START_ALPHA);
-                    float previousEndValue = StackStateAnimator.getChildTag(mHeadsUpScrim,
-                           TAG_HUN_END_ALPHA);
+                    float previousStartValue = StackStateAnimator.getChildTag(scrim,
+                            TAG_START_ALPHA);
+                    float previousEndValue = StackStateAnimator.getChildTag(scrim,
+                            TAG_END_ALPHA);
                     // we need to increase all animation keyframes of the previous animator by the
                     // relative change to the end value
                     PropertyValuesHolder[] values = previousAnimator.getValues();
                     float relativeDiff = alpha - previousEndValue;
                     float newStartValue = previousStartValue + relativeDiff;
+                    newStartValue = Math.max(0, Math.min(1.0f, newStartValue));
                     values[0].setFloatValues(newStartValue, alpha);
-                    mHeadsUpScrim.setTag(TAG_HUN_START_ALPHA, newStartValue);
-                    mHeadsUpScrim.setTag(TAG_HUN_END_ALPHA, alpha);
+                    scrim.setTag(TAG_START_ALPHA, newStartValue);
+                    scrim.setTag(TAG_END_ALPHA, alpha);
                     previousAnimator.setCurrentPlayTime(previousAnimator.getCurrentPlayTime());
                 } else {
                     // update the alpha directly
-                    setCurrentScrimAlpha(mHeadsUpScrim, alpha);
-                    updateScrimColor(mHeadsUpScrim);
+                    setCurrentScrimAlpha(scrim, alpha);
+                    updateScrimColor(scrim);
                 }
             }
         }
@@ -503,5 +558,32 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener,
 
     public void dontAnimateBouncerChangesUntilNextFrame() {
         mDontAnimateBouncerChanges = true;
+    }
+
+    public void setExcludedBackgroundArea(Rect area) {
+        mScrimBehind.setExcludedArea(area);
+    }
+
+    public void setLeftInset(int inset) {
+        mScrimBehind.setLeftInset(inset);
+    }
+
+    public int getScrimBehindColor() {
+        return mScrimBehind.getScrimColorWithAlpha();
+    }
+
+    public void setScrimBehindChangeRunnable(Runnable changeRunnable) {
+        mScrimBehind.setChangeRunnable(changeRunnable);
+    }
+
+    public void onDensityOrFontScaleChanged() {
+        ViewGroup.LayoutParams layoutParams = mHeadsUpScrim.getLayoutParams();
+        layoutParams.height = mHeadsUpScrim.getResources().getDimensionPixelSize(
+                R.dimen.heads_up_scrim_height);
+        mHeadsUpScrim.setLayoutParams(layoutParams);
+    }
+
+    public void setCurrentUser(int currentUser) {
+        // Don't care in the base class.
     }
 }

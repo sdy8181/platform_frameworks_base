@@ -248,7 +248,7 @@ bail:
 }
 
 static void printResolvedResourceAttribute(const ResTable& resTable, const ResXMLTree& tree,
-        uint32_t attrRes, String8 attrLabel, String8* outError)
+        uint32_t attrRes, const String8& attrLabel, String8* outError)
 {
     Res_value value;
     AaptXml::getResolvedResourceAttribute(resTable, tree, attrRes, &value, outError);
@@ -399,7 +399,7 @@ static void printUsesImpliedPermission(const String8& name, const String8& reaso
             ResTable::normalizeForOutput(reason.string()).string());
 }
 
-Vector<String8> getNfcAidCategories(AssetManager& assets, String8 xmlPath, bool offHost,
+Vector<String8> getNfcAidCategories(AssetManager& assets, const String8& xmlPath, bool offHost,
         String8 *outError = NULL)
 {
     Asset* aidAsset = assets.openNonAsset(xmlPath, Asset::ACCESS_BUFFER);
@@ -492,6 +492,21 @@ struct ImpliedFeature {
     SortedVector<String8> reasons;
 };
 
+struct Feature {
+    Feature() : required(false), version(-1) {}
+    Feature(bool required, int32_t version = -1) : required(required), version(version) {}
+
+    /**
+     * Whether the feature is required.
+     */
+    bool required;
+
+    /**
+     * What version of the feature is requested.
+     */
+    int32_t version;
+};
+
 /**
  * Represents a <feature-group> tag in the AndroidManifest.xml
  */
@@ -506,7 +521,7 @@ struct FeatureGroup {
     /**
      * Explicit features defined in the group
      */
-    KeyedVector<String8, bool> features;
+    KeyedVector<String8, Feature> features;
 
     /**
      * OpenGL ES version required
@@ -514,8 +529,18 @@ struct FeatureGroup {
     int openGLESVersion;
 };
 
+static bool hasFeature(const char* name, const FeatureGroup& grp,
+                       const KeyedVector<String8, ImpliedFeature>& implied) {
+    String8 name8(name);
+    ssize_t idx = grp.features.indexOfKey(name8);
+    if (idx < 0) {
+        idx = implied.indexOfKey(name8);
+    }
+    return idx >= 0;
+}
+
 static void addImpliedFeature(KeyedVector<String8, ImpliedFeature>* impliedFeatures,
-                              const char* name, const char* reason, bool sdk23) {
+                              const char* name, const String8& reason, bool sdk23) {
     String8 name8(name);
     ssize_t idx = impliedFeatures->indexOfKey(name8);
     if (idx < 0) {
@@ -528,7 +553,7 @@ static void addImpliedFeature(KeyedVector<String8, ImpliedFeature>* impliedFeatu
     if (feature->impliedBySdk23 && !sdk23) {
         feature->impliedBySdk23 = false;
     }
-    feature->reasons.add(String8(reason));
+    feature->reasons.add(reason);
 }
 
 static void printFeatureGroupImpl(const FeatureGroup& grp,
@@ -541,11 +566,18 @@ static void printFeatureGroupImpl(const FeatureGroup& grp,
 
     const size_t numFeatures = grp.features.size();
     for (size_t i = 0; i < numFeatures; i++) {
-        const bool required = grp.features[i];
+        const Feature& feature = grp.features[i];
+        const bool required = feature.required;
+        const int32_t version = feature.version;
 
         const String8& featureName = grp.features.keyAt(i);
-        printf("  uses-feature%s: name='%s'\n", (required ? "" : "-not-required"),
+        printf("  uses-feature%s: name='%s'", (required ? "" : "-not-required"),
                 ResTable::normalizeForOutput(featureName.string()).string());
+
+        if (version > 0) {
+            printf(" version='%d'", version);
+        }
+        printf("\n");
     }
 
     const size_t numImpliedFeatures =
@@ -590,15 +622,22 @@ static void printDefaultFeatureGroup(const FeatureGroup& grp,
 static void addParentFeatures(FeatureGroup* grp, const String8& name) {
     if (name == "android.hardware.camera.autofocus" ||
             name == "android.hardware.camera.flash") {
-        grp->features.add(String8("android.hardware.camera"), true);
+        grp->features.add(String8("android.hardware.camera"), Feature(true));
     } else if (name == "android.hardware.location.gps" ||
             name == "android.hardware.location.network") {
-        grp->features.add(String8("android.hardware.location"), true);
+        grp->features.add(String8("android.hardware.location"), Feature(true));
+    } else if (name == "android.hardware.faketouch.multitouch") {
+        grp->features.add(String8("android.hardware.faketouch"), Feature(true));
+    } else if (name == "android.hardware.faketouch.multitouch.distinct" ||
+            name == "android.hardware.faketouch.multitouch.jazzhands") {
+        grp->features.add(String8("android.hardware.faketouch.multitouch"), Feature(true));
+        grp->features.add(String8("android.hardware.faketouch"), Feature(true));
     } else if (name == "android.hardware.touchscreen.multitouch") {
-        grp->features.add(String8("android.hardware.touchscreen"), true);
-    } else if (name == "android.hardware.touchscreen.multitouch.distinct") {
-        grp->features.add(String8("android.hardware.touchscreen.multitouch"), true);
-        grp->features.add(String8("android.hardware.touchscreen"), true);
+        grp->features.add(String8("android.hardware.touchscreen"), Feature(true));
+    } else if (name == "android.hardware.touchscreen.multitouch.distinct" ||
+            name == "android.hardware.touchscreen.multitouch.jazzhands") {
+        grp->features.add(String8("android.hardware.touchscreen.multitouch"), Feature(true));
+        grp->features.add(String8("android.hardware.touchscreen"), Feature(true));
     } else if (name == "android.hardware.opengles.aep") {
         const int openGLESVersion31 = 0x00030001;
         if (openGLESVersion31 > grp->openGLESVersion) {
@@ -612,50 +651,58 @@ static void addImpliedFeaturesForPermission(const int targetSdk, const String8& 
                                             bool impliedBySdk23Permission) {
     if (name == "android.permission.CAMERA") {
         addImpliedFeature(impliedFeatures, "android.hardware.camera",
-                String8::format("requested %s permission", name.string())
-                .string(), impliedBySdk23Permission);
+                          String8::format("requested %s permission", name.string()),
+                          impliedBySdk23Permission);
     } else if (name == "android.permission.ACCESS_FINE_LOCATION") {
-        addImpliedFeature(impliedFeatures, "android.hardware.location.gps",
-                String8::format("requested %s permission", name.string())
-                .string(), impliedBySdk23Permission);
+        if (targetSdk < SDK_LOLLIPOP) {
+            addImpliedFeature(impliedFeatures, "android.hardware.location.gps",
+                              String8::format("requested %s permission", name.string()),
+                              impliedBySdk23Permission);
+            addImpliedFeature(impliedFeatures, "android.hardware.location.gps",
+                              String8::format("targetSdkVersion < %d", SDK_LOLLIPOP),
+                              impliedBySdk23Permission);
+        }
         addImpliedFeature(impliedFeatures, "android.hardware.location",
-                String8::format("requested %s permission", name.string())
-                .string(), impliedBySdk23Permission);
-    } else if (name == "android.permission.ACCESS_MOCK_LOCATION") {
-        addImpliedFeature(impliedFeatures, "android.hardware.location",
-                String8::format("requested %s permission", name.string())
-                .string(), impliedBySdk23Permission);
+                String8::format("requested %s permission", name.string()),
+                impliedBySdk23Permission);
     } else if (name == "android.permission.ACCESS_COARSE_LOCATION") {
-        addImpliedFeature(impliedFeatures, "android.hardware.location.network",
-                String8::format("requested %s permission", name.string())
-                .string(), impliedBySdk23Permission);
+        if (targetSdk < SDK_LOLLIPOP) {
+            addImpliedFeature(impliedFeatures, "android.hardware.location.network",
+                              String8::format("requested %s permission", name.string()),
+                              impliedBySdk23Permission);
+            addImpliedFeature(impliedFeatures, "android.hardware.location.network",
+                              String8::format("targetSdkVersion < %d", SDK_LOLLIPOP),
+                              impliedBySdk23Permission);
+        }
         addImpliedFeature(impliedFeatures, "android.hardware.location",
-                String8::format("requested %s permission", name.string())
-                .string(), impliedBySdk23Permission);
-    } else if (name == "android.permission.ACCESS_LOCATION_EXTRA_COMMANDS" ||
+                          String8::format("requested %s permission", name.string()),
+                          impliedBySdk23Permission);
+    } else if (name == "android.permission.ACCESS_MOCK_LOCATION" ||
+               name == "android.permission.ACCESS_LOCATION_EXTRA_COMMANDS" ||
                name == "android.permission.INSTALL_LOCATION_PROVIDER") {
         addImpliedFeature(impliedFeatures, "android.hardware.location",
-                String8::format("requested %s permission", name.string())
-                .string(), impliedBySdk23Permission);
+                          String8::format("requested %s permission", name.string()),
+                          impliedBySdk23Permission);
     } else if (name == "android.permission.BLUETOOTH" ||
                name == "android.permission.BLUETOOTH_ADMIN") {
-        if (targetSdk > 4) {
+        if (targetSdk > SDK_DONUT) {
             addImpliedFeature(impliedFeatures, "android.hardware.bluetooth",
-                    String8::format("requested %s permission", name.string())
-                    .string(), impliedBySdk23Permission);
+                              String8::format("requested %s permission", name.string()),
+                              impliedBySdk23Permission);
             addImpliedFeature(impliedFeatures, "android.hardware.bluetooth",
-                    "targetSdkVersion > 4", impliedBySdk23Permission);
+                              String8::format("targetSdkVersion > %d", SDK_DONUT),
+                              impliedBySdk23Permission);
         }
     } else if (name == "android.permission.RECORD_AUDIO") {
         addImpliedFeature(impliedFeatures, "android.hardware.microphone",
-                String8::format("requested %s permission", name.string())
-                .string(), impliedBySdk23Permission);
+                          String8::format("requested %s permission", name.string()),
+                          impliedBySdk23Permission);
     } else if (name == "android.permission.ACCESS_WIFI_STATE" ||
                name == "android.permission.CHANGE_WIFI_STATE" ||
                name == "android.permission.CHANGE_WIFI_MULTICAST_STATE") {
         addImpliedFeature(impliedFeatures, "android.hardware.wifi",
-                String8::format("requested %s permission", name.string())
-                .string(), impliedBySdk23Permission);
+                          String8::format("requested %s permission", name.string()),
+                          impliedBySdk23Permission);
     } else if (name == "android.permission.CALL_PHONE" ||
                name == "android.permission.CALL_PRIVILEGED" ||
                name == "android.permission.MODIFY_PHONE_STATE" ||
@@ -668,8 +715,8 @@ static void addImpliedFeaturesForPermission(const int targetSdk, const String8& 
                name == "android.permission.WRITE_APN_SETTINGS" ||
                name == "android.permission.WRITE_SMS") {
         addImpliedFeature(impliedFeatures, "android.hardware.telephony",
-                String8("requested a telephony permission").string(),
-                impliedBySdk23Permission);
+                          String8("requested a telephony permission"),
+                          impliedBySdk23Permission);
     }
 }
 
@@ -726,6 +773,9 @@ int doDump(Bundle* bundle)
         fprintf(stderr, "ERROR: dump failed because the resource table is invalid/corrupt.\n");
         return 1;
     }
+
+    // Source for AndroidManifest.xml
+    const String8 manifestFile = String8::format("%s@AndroidManifest.xml", filename);
 
     // The dynamicRefTable can be null if there are no resources for this asset cookie.
     // This fine.
@@ -1424,10 +1474,28 @@ int doDump(Bundle* bundle)
                     } else if (tag == "uses-feature") {
                         String8 name = AaptXml::getAttribute(tree, NAME_ATTR, &error);
                         if (name != "" && error == "") {
-                            int req = AaptXml::getIntegerAttribute(tree,
-                                    REQUIRED_ATTR, 1);
+                            const char* androidSchema =
+                                    "http://schemas.android.com/apk/res/android";
 
-                            commonFeatures.features.add(name, req);
+                            int32_t req = AaptXml::getIntegerAttribute(tree, REQUIRED_ATTR, 1,
+                                                                       &error);
+                            if (error != "") {
+                                SourcePos(manifestFile, tree.getLineNumber()).error(
+                                        "failed to read attribute 'android:required': %s",
+                                        error.string());
+                                goto bail;
+                            }
+
+                            int32_t version = AaptXml::getIntegerAttribute(tree, androidSchema,
+                                                                           "version", 0, &error);
+                            if (error != "") {
+                                SourcePos(manifestFile, tree.getLineNumber()).error(
+                                        "failed to read attribute 'android:version': %s",
+                                        error.string());
+                                goto bail;
+                            }
+
+                            commonFeatures.features.add(name, Feature(req != 0, version));
                             if (req) {
                                 addParentFeatures(&commonFeatures, name);
                             }
@@ -1599,18 +1667,18 @@ int doDump(Bundle* bundle)
                             if (error == "") {
                                 if (orien == 0 || orien == 6 || orien == 8) {
                                     // Requests landscape, sensorLandscape, or reverseLandscape.
-                                    addImpliedFeature(&impliedFeatures,
-                                                      "android.hardware.screen.landscape",
-                                                      "one or more activities have specified a "
-                                                      "landscape orientation",
-                                                      false);
+                                    addImpliedFeature(
+                                            &impliedFeatures, "android.hardware.screen.landscape",
+                                            String8("one or more activities have specified a "
+                                                    "landscape orientation"),
+                                            false);
                                 } else if (orien == 1 || orien == 7 || orien == 9) {
                                     // Requests portrait, sensorPortrait, or reversePortrait.
-                                    addImpliedFeature(&impliedFeatures,
-                                                      "android.hardware.screen.portrait",
-                                                      "one or more activities have specified a "
-                                                      "portrait orientation",
-                                                      false);
+                                    addImpliedFeature(
+                                            &impliedFeatures, "android.hardware.screen.portrait",
+                                            String8("one or more activities have specified a "
+                                                    "portrait orientation"),
+                                            false);
                                 }
                             }
                         } else if (tag == "uses-library") {
@@ -1751,12 +1819,27 @@ int doDump(Bundle* bundle)
                             }
                         }
                     } else if (withinFeatureGroup && tag == "uses-feature") {
+                        const String8 androidSchema("http://schemas.android.com/apk/res/android");
                         FeatureGroup& top = featureGroups.editTop();
 
                         String8 name = AaptXml::getResolvedAttribute(res, tree, NAME_ATTR, &error);
                         if (name != "" && error == "") {
-                            top.features.add(name, true);
+                            Feature feature(true);
+
+                            int32_t featureVers = AaptXml::getIntegerAttribute(
+                                    tree, androidSchema.string(), "version", 0, &error);
+                            if (error == "") {
+                                feature.version = featureVers;
+                            } else {
+                                SourcePos(manifestFile, tree.getLineNumber()).error(
+                                        "failed to read attribute 'android:version': %s",
+                                        error.string());
+                                goto bail;
+                            }
+
+                            top.features.add(name, feature);
                             addParentFeatures(&top, name);
+
                         } else {
                             int vers = AaptXml::getIntegerAttribute(tree, GL_ES_VERSION_ATTR,
                                     &error);
@@ -1947,8 +2030,12 @@ int doDump(Bundle* bundle)
                 }
             }
 
-            addImpliedFeature(&impliedFeatures, "android.hardware.touchscreen",
-                    "default feature for all apps", false);
+            // If the app hasn't declared the touchscreen as a feature requirement (either
+            // directly or implied, required or not), then the faketouch feature is implied.
+            if (!hasFeature("android.hardware.touchscreen", commonFeatures, impliedFeatures)) {
+                addImpliedFeature(&impliedFeatures, "android.hardware.faketouch",
+                                  String8("default feature for all apps"), false);
+            }
 
             const size_t numFeatureGroups = featureGroups.size();
             if (numFeatureGroups == 0) {
@@ -2529,11 +2616,11 @@ int doPackage(Bundle* bundle)
             // Write the R.java file into the appropriate class directory
             // e.g. gen/com/foo/app/R.java
             err = writeResourceSymbols(bundle, assets, assets->getPackage(), true,
-                    bundle->getBuildSharedLibrary());
+                    bundle->getBuildSharedLibrary() || bundle->getBuildAppAsSharedLibrary());
         } else {
             const String8 customPkg(bundle->getCustomPackage());
             err = writeResourceSymbols(bundle, assets, customPkg, true,
-                    bundle->getBuildSharedLibrary());
+                    bundle->getBuildSharedLibrary() || bundle->getBuildAppAsSharedLibrary());
         }
         if (err < 0) {
             goto bail;
@@ -2548,7 +2635,7 @@ int doPackage(Bundle* bundle)
             while (packageString != NULL) {
                 // Write the R.java file out with the correct package name
                 err = writeResourceSymbols(bundle, assets, String8(packageString), true,
-                        bundle->getBuildSharedLibrary());
+                        bundle->getBuildSharedLibrary() || bundle->getBuildAppAsSharedLibrary());
                 if (err < 0) {
                     goto bail;
                 }

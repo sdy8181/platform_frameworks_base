@@ -25,6 +25,7 @@ import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.os.Build;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.util.DisplayMetrics;
@@ -338,8 +339,8 @@ public class SubscriptionInfo implements Parcelable {
     public static String givePrintableIccid(String iccId) {
         String iccIdToPrint = null;
         if (iccId != null) {
-            if (iccId.length() > 9) {
-                iccIdToPrint = iccId.substring(0, 9) + "XXXXXXXXXXX";
+            if (iccId.length() > 9 && !Build.IS_DEBUGGABLE) {
+                iccIdToPrint = iccId.substring(0, 9) + Rlog.pii(false, iccId.substring(9));
             } else {
                 iccIdToPrint = iccId;
             }

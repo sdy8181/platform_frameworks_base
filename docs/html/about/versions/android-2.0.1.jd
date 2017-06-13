@@ -30,11 +30,6 @@ differences report &raquo;</a> </li>
   </li>
   </ol>
 
-  <h2>See Also</h2>
-  <ol>
-    <li><a href="{@docRoot}sdk/exploring.html">Exploring the SDK</a></li>
-  </ol>
-
 </div>
 </div>
 
@@ -56,9 +51,7 @@ includes no external libraries. </p>
 
 <p>To get started developing or testing against the Android
 {@sdkPlatformVersion} platform, use the Android SDK and AVD Manager tool to
-download the platform into your Android 1.6 or later SDK. For more information,
-see <a href="{@docRoot}sdk/exploring.html">Exploring the
-SDK</a>.</p>
+download the platform into your Android 1.6 or later SDK.</p>
 
 
 <h2 id="features">Platform Highlights</h2>
@@ -82,12 +75,12 @@ function toggleDiv(link) {
     //$(".toggleme", toggleable).slideDown("fast");
     toggleable.removeClass("closed");
     toggleable.addClass("open");
-    $(".toggle-img", toggleable).attr("title", "hide").attr("src", (toRoot + "assets/images/triangle-opened.png"));
+    $(".toggle-img", toggleable).attr("title", "hide").attr("src", (toRoot + "assets/images/styles/disclosure_up.png"));
   } else {
     //$(".toggleme", toggleable).slideUp("fast");
     toggleable.removeClass("open");
     toggleable.addClass("closed");
-    $(".toggle-img", toggleable).attr("title", "show").attr("src", (toRoot + "assets/images/triangle-closed.png"));
+    $(".toggle-img", toggleable).attr("title", "show").attr("src", (toRoot + "assets/images/styles/disclosure_down.png"));
   }
   return false;
 }
@@ -106,14 +99,14 @@ padding: .25em 1em;
 .toggleable.closed .toggleme {
   display:none;
 }
-#jd-content .toggle-img {
+#body-content .toggle-img {
   margin:0;
 }
 </style>
 
 <div class="toggleable closed">
   <a href="#" onclick="return toggleDiv(this)">
-        <img src="{@docRoot}assets/images/triangle-closed.png" class="toggle-img" height="9px" width="9px" />
+        <img src="{@docRoot}assets/images/styles/disclosure_down.png" class="toggle-img" height="9px" width="9px" />
         Android 2.0.1, Revision 1</a> <em>(December 2009)</em></a>
   <div class="toggleme">
 <dl>
@@ -169,8 +162,8 @@ third-party sync adapters.</p>
 <p>The system image included in the downloadable platform provides a variety of
 built-in locales. In some cases, region-specific strings are available for the
 locales. In other cases, a default version of the language is used. The
-languages that are available in the Android {@sdkPlatformVersion} system 
-image are listed below (with <em>language</em>_<em>country/region</em> locale 
+languages that are available in the Android {@sdkPlatformVersion} system
+image are listed below (with <em>language</em>_<em>country/region</em> locale
 descriptor).</p>
 
 <table style="border:0;padding-bottom:0;margin-bottom:0;">
@@ -210,7 +203,7 @@ descriptor).</p>
 </tr>
 </table>
 
-<p>Localized UI strings match the locales that are accessible 
+<p>Localized UI strings match the locales that are accessible
 through Settings.</p>
 
 <h2 id="skins">Emulator Skins</h2>
@@ -270,8 +263,8 @@ stored in the system itself. This identifier, called the "API Level", allows the
 system to correctly determine whether an application is compatible with
 the system, prior to installing the application. </p>
 
-<p>To use APIs introduced in Android {@sdkPlatformVersion} in your application, you need to 
-set the proper value, "{@sdkPlatformApiLevel}", in the attributes of the <code>&lt;uses-sdk&gt;</code> 
+<p>To use APIs introduced in Android {@sdkPlatformVersion} in your application, you need to
+set the proper value, "{@sdkPlatformApiLevel}", in the attributes of the <code>&lt;uses-sdk&gt;</code>
 element in your application's manifest. </p>
 
 <p>For more information about how to use API Level, see the <a
@@ -352,10 +345,10 @@ package name, rather than the process name.</li>
 
 <h3 id="api-diff">API differences report</h3>
 
-<p>For a detailed view of API changes in Android {@sdkPlatformVersion} (API Level {@sdkPlatformApiLevel}), as compared to 
+<p>For a detailed view of API changes in Android {@sdkPlatformVersion} (API Level {@sdkPlatformApiLevel}), as compared to
 API Level 5, see the <a
 href="{@docRoot}sdk/api_diff/{@sdkPlatformApiLevel}/changes.html">API
-Differences Report</a>. There are very few API changes in API Level 6, 
+Differences Report</a>. There are very few API changes in API Level 6,
 so you might also be interested in reviewing the <a
 href="{@docRoot}sdk/api_diff/5/changes.html">API
 differences between 4 and 5</a>.</p>

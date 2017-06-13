@@ -24,6 +24,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.net.Uri;
 import android.util.ArrayMap;
 import android.util.Log;
 import android.util.Printer;
@@ -46,7 +47,6 @@ import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -191,9 +191,14 @@ public final class StrictMode {
      */
     public static final int DETECT_RESOURCE_MISMATCH = 0x10;  // for ThreadPolicy
 
+    /**
+     * @hide
+     */
+    public static final int DETECT_UNBUFFERED_IO = 0x20;  // for ThreadPolicy
+
     private static final int ALL_THREAD_DETECT_BITS =
             DETECT_DISK_WRITE | DETECT_DISK_READ | DETECT_NETWORK | DETECT_CUSTOM |
-            DETECT_RESOURCE_MISMATCH;
+            DETECT_RESOURCE_MISMATCH | DETECT_UNBUFFERED_IO;
 
     // Byte 2: Process-policy
 
@@ -243,42 +248,15 @@ public final class StrictMode {
 
     // Byte 3: Penalty
 
-    /**
-     * @hide
-     */
+    /** {@hide} */
     public static final int PENALTY_LOG = 0x01 << 16;  // normal android.util.Log
-
-    // Used for both process and thread policy:
-
-    /**
-     * @hide
-     */
+    /** {@hide} */
     public static final int PENALTY_DIALOG = 0x02 << 16;
-
-    /**
-     * Death on any detected violation.
-     *
-     * @hide
-     */
+    /** {@hide} */
     public static final int PENALTY_DEATH = 0x04 << 16;
-
-    /**
-     * Death just for detected network usage.
-     *
-     * @hide
-     */
-    public static final int PENALTY_DEATH_ON_NETWORK = 0x08 << 16;
-
-    /**
-     * Flash the screen during violations.
-     *
-     * @hide
-     */
+    /** {@hide} */
     public static final int PENALTY_FLASH = 0x10 << 16;
-
-    /**
-     * @hide
-     */
+    /** {@hide} */
     public static final int PENALTY_DROPBOX = 0x20 << 16;
 
     /**
@@ -294,12 +272,28 @@ public final class StrictMode {
      */
     public static final int PENALTY_GATHER = 0x40 << 16;
 
+    // Byte 4: Special cases
+
+    /**
+     * Death when network traffic is detected on main thread.
+     *
+     * @hide
+     */
+    public static final int PENALTY_DEATH_ON_NETWORK = 0x01 << 24;
+
     /**
      * Death when cleartext network traffic is detected.
      *
      * @hide
      */
-    public static final int PENALTY_DEATH_ON_CLEARTEXT_NETWORK = 0x80 << 16;
+    public static final int PENALTY_DEATH_ON_CLEARTEXT_NETWORK = 0x02 << 24;
+
+    /**
+     * Death when file exposure is detected.
+     *
+     * @hide
+     */
+    public static final int PENALTY_DEATH_ON_FILE_URI_EXPOSURE = 0x04 << 24;
 
     /**
      * Mask of all the penalty bits valid for thread policies.
@@ -312,7 +306,7 @@ public final class StrictMode {
      * Mask of all the penalty bits valid for VM policies.
      */
     private static final int VM_PENALTY_MASK = PENALTY_LOG | PENALTY_DEATH | PENALTY_DROPBOX
-            | PENALTY_DEATH_ON_CLEARTEXT_NETWORK;
+            | PENALTY_DEATH_ON_CLEARTEXT_NETWORK | PENALTY_DEATH_ON_FILE_URI_EXPOSURE;
 
     /** {@hide} */
     public static final int NETWORK_POLICY_ACCEPT = 0;
@@ -473,6 +467,20 @@ public final class StrictMode {
              */
             public Builder permitResourceMismatches() {
                 return disable(DETECT_RESOURCE_MISMATCH);
+            }
+
+            /**
+             * Detect unbuffered input/output operations.
+             */
+            public Builder detectUnbufferedIo() {
+                return enable(DETECT_UNBUFFERED_IO);
+            }
+
+            /**
+             * Disable detection of unbuffered input/output operations.
+             */
+            public Builder permitUnbufferedIo() {
+                return disable(DETECT_UNBUFFERED_IO);
             }
 
             /**
@@ -748,10 +756,22 @@ public final class StrictMode {
             }
 
             /**
-             * Detect when a {@code file://} {@link android.net.Uri} is exposed beyond this
-             * app. The receiving app may not have access to the sent path.
-             * Instead, when sharing files between apps, {@code content://}
-             * should be used with permission grants.
+             * Detect when this application exposes a {@code file://}
+             * {@link android.net.Uri} to another app.
+             * <p>
+             * This exposure is discouraged since the receiving app may not have
+             * access to the shared path. For example, the receiving app may not
+             * have requested the
+             * {@link android.Manifest.permission#READ_EXTERNAL_STORAGE} runtime
+             * permission, or the platform may be sharing the
+             * {@link android.net.Uri} across user profile boundaries.
+             * <p>
+             * Instead, apps should use {@code content://} Uris so the platform
+             * can extend temporary permission for the receiving app to access
+             * the resource.
+             *
+             * @see android.support.v4.content.FileProvider
+             * @see Intent#FLAG_GRANT_READ_URI_PERMISSION
              */
             public Builder detectFileUriExposure() {
                 return enable(DETECT_VM_FILE_URI_EXPOSURE);
@@ -795,6 +815,16 @@ public final class StrictMode {
              */
             public Builder penaltyDeathOnCleartextNetwork() {
                 return enable(PENALTY_DEATH_ON_CLEARTEXT_NETWORK);
+            }
+
+            /**
+             * Crashes the whole process when a {@code file://}
+             * {@link android.net.Uri} is exposed beyond this app.
+             *
+             * @see #detectFileUriExposure()
+             */
+            public Builder penaltyDeathOnFileUriExposure() {
+                return enable(PENALTY_DEATH_ON_FILE_URI_EXPOSURE);
             }
 
             /**
@@ -963,6 +993,15 @@ public final class StrictMode {
     }
 
     /**
+     * @hide
+     */
+    private static class StrictModeUnbufferedIOViolation extends StrictModeViolation {
+        public StrictModeUnbufferedIOViolation(int policyMask) {
+            super(policyMask, DETECT_UNBUFFERED_IO, null);
+        }
+    }
+
+    /**
      * Returns the bitmask of the current thread's policy.
      *
      * @return the bitmask of all the DETECT_* and PENALTY_* bits currently enabled
@@ -1111,6 +1150,25 @@ public final class StrictMode {
     }
 
     /**
+     * Used by the framework to make file usage a fatal error.
+     *
+     * @hide
+     */
+    public static void enableDeathOnFileUriExposure() {
+        sVmPolicyMask |= DETECT_VM_FILE_URI_EXPOSURE | PENALTY_DEATH_ON_FILE_URI_EXPOSURE;
+    }
+
+    /**
+     * Used by lame internal apps that haven't done the hard work to get
+     * themselves off file:// Uris yet.
+     *
+     * @hide
+     */
+    public static void disableDeathOnFileUriExposure() {
+        sVmPolicyMask &= ~(DETECT_VM_FILE_URI_EXPOSURE | PENALTY_DEATH_ON_FILE_URI_EXPOSURE);
+    }
+
+    /**
      * Parses the BlockGuard policy mask out from the Exception's
      * getMessage() String value.  Kinda gross, but least
      * invasive.  :/
@@ -1133,7 +1191,7 @@ public final class StrictMode {
         }
         String policyString = message.substring(7, spaceIndex);
         try {
-            return Integer.valueOf(policyString).intValue();
+            return Integer.parseInt(policyString);
         } catch (NumberFormatException e) {
             return 0;
         }
@@ -1157,7 +1215,7 @@ public final class StrictMode {
         }
         String violationString = message.substring(numberStartIndex, numberEndIndex);
         try {
-            return Integer.valueOf(violationString).intValue();
+            return Integer.parseInt(violationString);
         } catch (NumberFormatException e) {
             return 0;
         }
@@ -1247,6 +1305,20 @@ public final class StrictMode {
             }
             BlockGuard.BlockGuardPolicyException e =
                     new StrictModeResourceMismatchViolation(mPolicyMask, tag);
+            e.fillInStackTrace();
+            startHandlingViolationException(e);
+        }
+
+        // Part of BlockGuard.Policy; just part of StrictMode:
+        public void onUnbufferedIO() {
+            if ((mPolicyMask & DETECT_UNBUFFERED_IO) == 0) {
+                return;
+            }
+            if (tooManyViolationsThisLoop()) {
+                return;
+            }
+            BlockGuard.BlockGuardPolicyException e =
+                    new StrictModeUnbufferedIOViolation(mPolicyMask);
             e.fillInStackTrace();
             startHandlingViolationException(e);
         }
@@ -1402,9 +1474,6 @@ public final class StrictMode {
                 if (violations == null) {
                     violations = new ArrayList<ViolationInfo>(1);
                     gatheredViolations.set(violations);
-                } else if (violations.size() >= 5) {
-                    // Too many.  In a loop or something?  Don't gather them all.
-                    return;
                 }
                 for (ViolationInfo previous : violations) {
                     if (info.crashInfo.stackTrace.equals(previous.crashInfo.stackTrace)) {
@@ -1487,7 +1556,11 @@ public final class StrictMode {
                         violationMaskSubset,
                         info);
                 } catch (RemoteException e) {
-                    Log.e(TAG, "RemoteException trying to handle StrictMode violation", e);
+                    if (e instanceof DeadObjectException) {
+                        // System process is dead; ignore
+                    } else {
+                        Log.e(TAG, "RemoteException trying to handle StrictMode violation", e);
+                    }
                 } finally {
                     // Restore the policy.
                     setThreadPolicyMask(savedPolicyMask);
@@ -1539,7 +1612,11 @@ public final class StrictMode {
                             info);
                     }
                 } catch (RemoteException e) {
-                    Log.e(TAG, "RemoteException handling StrictMode violation", e);
+                    if (e instanceof DeadObjectException) {
+                        // System process is dead; ignore
+                    } else {
+                        Log.e(TAG, "RemoteException handling StrictMode violation", e);
+                    }
                 }
                 int outstanding = sDropboxCallsInFlight.decrementAndGet();
                 if (LOG_V) Log.d(TAG, "Dropbox complete; in-flight=" + outstanding);
@@ -1755,9 +1832,13 @@ public final class StrictMode {
     /**
      * @hide
      */
-    public static void onFileUriExposed(String location) {
-        final String message = "file:// Uri exposed through " + location;
-        onVmPolicyViolation(null, new Throwable(message));
+    public static void onFileUriExposed(Uri uri, String location) {
+        final String message = uri + " exposed beyond app through " + location;
+        if ((sVmPolicyMask & PENALTY_DEATH_ON_FILE_URI_EXPOSURE) != 0) {
+            throw new FileUriExposedException(message);
+        } else {
+            onVmPolicyViolation(null, new Throwable(message));
+        }
     }
 
     /**
@@ -1863,7 +1944,11 @@ public final class StrictMode {
                     violationMaskSubset,
                     info);
             } catch (RemoteException e) {
-                Log.e(TAG, "RemoteException trying to handle StrictMode violation", e);
+                if (e instanceof DeadObjectException) {
+                    // System process is dead; ignore
+                } else {
+                    Log.e(TAG, "RemoteException trying to handle StrictMode violation", e);
+                }
             } finally {
                 // Restore the policy.
                 setThreadPolicyMask(savedPolicyMask);
@@ -1885,18 +1970,14 @@ public final class StrictMode {
         if (violations == null) {
             p.writeInt(0);
         } else {
-            p.writeInt(violations.size());
-            for (int i = 0; i < violations.size(); ++i) {
-                int start = p.dataPosition();
-                violations.get(i).writeToParcel(p, 0 /* unused flags? */);
-                int size = p.dataPosition()-start;
-                if (size > 10*1024) {
-                    Slog.d(TAG, "Wrote violation #" + i + " of " + violations.size() + ": "
-                            + (p.dataPosition()-start) + " bytes");
-                }
+            // To avoid taking up too much transaction space, only include
+            // details for the first 3 violations. Deep inside, CrashInfo
+            // will truncate each stack trace to ~20kB.
+            final int size = Math.min(violations.size(), 3);
+            p.writeInt(size);
+            for (int i = 0; i < size; i++) {
+                violations.get(i).writeToParcel(p, 0);
             }
-            if (LOG_V) Log.d(TAG, "wrote violations to response parcel; num=" + violations.size());
-            violations.clear(); // somewhat redundant, as we're about to null the threadlocal
         }
         gatheredViolations.set(null);
     }
@@ -1910,40 +1991,19 @@ public final class StrictMode {
     /* package */ static void readAndHandleBinderCallViolations(Parcel p) {
         // Our own stack trace to append
         StringWriter sw = new StringWriter();
+        sw.append("# via Binder call with stack:\n");
         PrintWriter pw = new FastPrintWriter(sw, false, 256);
         new LogStackTrace().printStackTrace(pw);
         pw.flush();
         String ourStack = sw.toString();
 
-        int policyMask = getThreadPolicyMask();
-        boolean currentlyGathering = (policyMask & PENALTY_GATHER) != 0;
+        final int policyMask = getThreadPolicyMask();
+        final boolean currentlyGathering = (policyMask & PENALTY_GATHER) != 0;
 
-        int numViolations = p.readInt();
-        for (int i = 0; i < numViolations; ++i) {
-            if (LOG_V) Log.d(TAG, "strict mode violation stacks read from binder call.  i=" + i);
-            ViolationInfo info = new ViolationInfo(p, !currentlyGathering);
-            if (info.crashInfo.stackTrace != null && info.crashInfo.stackTrace.length() > 30000) {
-                String front = info.crashInfo.stackTrace.substring(256);
-                // 30000 characters is way too large for this to be any sane kind of
-                // strict mode collection of stacks.  We've had a problem where we leave
-                // strict mode violations associated with the thread, and it keeps tacking
-                // more and more stacks on to the violations.  Looks like we're in this casse,
-                // so we'll report it and bail on all of the current strict mode violations
-                // we currently are maintaining for this thread.
-                // First, drain the remaining violations from the parcel.
-                i++;  // Skip the current entry.
-                for (; i < numViolations; i++) {
-                    info = new ViolationInfo(p, !currentlyGathering);
-                }
-                // Next clear out all gathered violations.
-                clearGatheredViolations();
-                // Now report the problem.
-                Slog.wtfStack(TAG, "Stack is too large: numViolations=" + numViolations
-                        + " policy=#" + Integer.toHexString(policyMask)
-                        + " front=" + front);
-                return;
-            }
-            info.crashInfo.stackTrace += "# via Binder call with stack:\n" + ourStack;
+        final int size = p.readInt();
+        for (int i = 0; i < size; i++) {
+            final ViolationInfo info = new ViolationInfo(p, !currentlyGathering);
+            info.crashInfo.appendStackTrace(ourStack);
             BlockGuard.Policy policy = BlockGuard.getThreadPolicy();
             if (policy instanceof AndroidBlockGuardPolicy) {
                 ((AndroidBlockGuardPolicy) policy).handleViolationWithTimingAttempt(info);
@@ -2162,6 +2222,18 @@ public final class StrictMode {
     /**
      * @hide
      */
+    public static void noteUnbufferedIO() {
+        BlockGuard.Policy policy = BlockGuard.getThreadPolicy();
+        if (!(policy instanceof AndroidBlockGuardPolicy)) {
+            // StrictMode not enabled.
+            return;
+        }
+        ((AndroidBlockGuardPolicy) policy).onUnbufferedIO();
+    }
+
+    /**
+     * @hide
+     */
     public static void noteDiskRead() {
         BlockGuard.Policy policy = BlockGuard.getThreadPolicy();
         if (!(policy instanceof AndroidBlockGuardPolicy)) {
@@ -2274,7 +2346,7 @@ public final class StrictMode {
      * @hide
      */
     public static class ViolationInfo {
-        public String message;
+        public final String message;
 
         /**
          * Stack and other stuff info.
@@ -2333,6 +2405,7 @@ public final class StrictMode {
          * Create an uninitialized instance of ViolationInfo
          */
         public ViolationInfo() {
+            message = null;
             crashInfo = null;
             policy = 0;
         }
@@ -2379,7 +2452,9 @@ public final class StrictMode {
         @Override
         public int hashCode() {
             int result = 17;
-            result = 37 * result + crashInfo.stackTrace.hashCode();
+            if (crashInfo != null) {
+                result = 37 * result + crashInfo.stackTrace.hashCode();
+            }
             if (numAnimationsRunning != 0) {
                 result *= 37;
             }
@@ -2409,7 +2484,11 @@ public final class StrictMode {
          */
         public ViolationInfo(Parcel in, boolean unsetGatheringBit) {
             message = in.readString();
-            crashInfo = new ApplicationErrorReport.CrashInfo(in);
+            if (in.readInt() != 0) {
+                crashInfo = new ApplicationErrorReport.CrashInfo(in);
+            } else {
+                crashInfo = null;
+            }
             int rawPolicy = in.readInt();
             if (unsetGatheringBit) {
                 policy = rawPolicy & ~PENALTY_GATHER;
@@ -2430,7 +2509,12 @@ public final class StrictMode {
          */
         public void writeToParcel(Parcel dest, int flags) {
             dest.writeString(message);
-            crashInfo.writeToParcel(dest, flags);
+            if (crashInfo != null) {
+                dest.writeInt(1);
+                crashInfo.writeToParcel(dest, flags);
+            } else {
+                dest.writeInt(0);
+            }
             int start = dest.dataPosition();
             dest.writeInt(policy);
             dest.writeInt(durationMillis);
@@ -2458,7 +2542,9 @@ public final class StrictMode {
          * Dump a ViolationInfo instance to a Printer.
          */
         public void dump(Printer pw, String prefix) {
-            crashInfo.dump(pw, prefix);
+            if (crashInfo != null) {
+                crashInfo.dump(pw, prefix);
+            }
             pw.println(prefix + "policy: " + policy);
             if (durationMillis != -1) {
                 pw.println(prefix + "durationMillis: " + durationMillis);

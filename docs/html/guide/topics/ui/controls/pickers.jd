@@ -123,15 +123,15 @@ android.support.v4.app.DialogFragment#show show()}.</p>
 <p>For example, here's a button that, when clicked, calls a method to show the dialog:</p>
 
 <pre>
-&lt;Button 
-    android:layout_width="wrap_content" 
+&lt;Button
+    android:layout_width="wrap_content"
     android:layout_height="wrap_content"
-    android:text="@string/pick_time" 
+    android:text="@string/pick_time"
     android:onClick="showTimePickerDialog" />
 </pre>
 
 <p>When the user clicks this button, the system calls the following method:</p>
-  
+
 <pre>
 public void showTimePickerDialog(View v) {
     DialogFragment newFragment = new TimePickerFragment();
@@ -170,10 +170,6 @@ android.support.v4.app.DialogFragment}, you need to define a fragment class that
 android.support.v4.app.DialogFragment} and return a {@link android.app.DatePickerDialog} from the
 fragment's {@link android.support.v4.app.DialogFragment#onCreateDialog onCreateDialog()} method.</p>
 
-<p class="note"><strong>Note:</strong> If your app supports versions of Android older than 3.0,
-be sure you've set up your Android project with the support library as described in <a
-href="{@docRoot}tools/support-library/setup.html">Setting Up a Project to Use a
-Library</a>.</p>
 
 <h3 id="DatePickerFragment">Extending DialogFragment for a date picker</h3>
 
@@ -228,15 +224,15 @@ android.support.v4.app.DialogFragment#show show()}.</p>
 <p>For example, here's a button that, when clicked, calls a method to show the dialog:</p>
 
 <pre>
-&lt;Button 
-    android:layout_width="wrap_content" 
+&lt;Button
+    android:layout_width="wrap_content"
     android:layout_height="wrap_content"
-    android:text="@string/pick_date" 
+    android:text="@string/pick_date"
     android:onClick="showDatePickerDialog" />
 </pre>
 
 <p>When the user clicks this button, the system calls the following method:</p>
-  
+
 <pre>
 public void showDatePickerDialog(View v) {
     DialogFragment newFragment = new DatePickerFragment();
@@ -250,9 +246,4 @@ android.support.v4.app.DialogFragment} defined above. The {@link
 android.support.v4.app.DialogFragment#show show()} method requires an instance of {@link
 android.support.v4.app.FragmentManager} and a unique tag name for the fragment.</p>
 
-<p class="caution"><strong>Caution:</strong> If your app supports versions of Android lower than
-3.0, be sure that you call {@link
-android.support.v4.app.FragmentActivity#getSupportFragmentManager()} to acquire an instance of
-{@link android.support.v4.app.FragmentManager}. Also make sure that your activity that displays the
-time picker extends {@link android.support.v4.app.FragmentActivity} instead of the standard {@link
-android.app.Activity} class.</p>
+

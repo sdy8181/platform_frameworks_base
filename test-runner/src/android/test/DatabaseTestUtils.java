@@ -16,17 +16,17 @@
 
 package android.test;
 
-import com.google.android.collect.Sets;
-
 import android.database.sqlite.SQLiteDatabase;
 import android.database.Cursor;
 
+import java.util.HashSet;
 import java.util.Set;
 
 /**
  * A collection of utilities for writing unit tests for database code.
  * @hide pending API council approval
  */
+@Deprecated
 public class DatabaseTestUtils {
 
     /**
@@ -41,7 +41,7 @@ public class DatabaseTestUtils {
     }
 
     private static Set<String> getSchemaSet(SQLiteDatabase db) {
-        Set<String> schemaSet = Sets.newHashSet();
+        Set<String> schemaSet = new HashSet<>();
 
         Cursor entityCursor = db.rawQuery("SELECT sql FROM sqlite_master", null);
         try {

@@ -20,13 +20,14 @@ import android.content.Context;
 import android.graphics.Rect;
 import android.util.AttributeSet;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 
 /**
  * A Pin based Keyguard input view
  */
 public abstract class KeyguardPinBasedInputView extends KeyguardAbsKeyInputView
-        implements View.OnKeyListener {
+        implements View.OnKeyListener, View.OnTouchListener {
 
     protected PasswordTextView mPasswordEntry;
     private View mOkButton;
@@ -89,7 +90,12 @@ public abstract class KeyguardPinBasedInputView extends KeyguardAbsKeyInputView
             return true;
         }
         if (keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) {
-            int number = keyCode - KeyEvent.KEYCODE_0 ;
+            int number = keyCode - KeyEvent.KEYCODE_0;
+            performNumberClick(number);
+            return true;
+        }
+        if (keyCode >= KeyEvent.KEYCODE_NUMPAD_0 && keyCode <= KeyEvent.KEYCODE_NUMPAD_9) {
+            int number = keyCode - KeyEvent.KEYCODE_NUMPAD_0;
             performNumberClick(number);
             return true;
         }
@@ -103,8 +109,14 @@ public abstract class KeyguardPinBasedInputView extends KeyguardAbsKeyInputView
                 return R.string.kg_prompt_reason_restart_pin;
             case PROMPT_REASON_TIMEOUT:
                 return R.string.kg_prompt_reason_timeout_pin;
-            default:
+            case PROMPT_REASON_DEVICE_ADMIN:
+                return R.string.kg_prompt_reason_device_admin;
+            case PROMPT_REASON_USER_REQUEST:
+                return R.string.kg_prompt_reason_user_request;
+            case PROMPT_REASON_NONE:
                 return 0;
+            default:
+                return R.string.kg_prompt_reason_timeout_pin;
         }
     }
 
@@ -148,8 +160,8 @@ public abstract class KeyguardPinBasedInputView extends KeyguardAbsKeyInputView
     }
 
     @Override
-    protected void resetPasswordText(boolean animate) {
-        mPasswordEntry.reset(animate);
+    protected void resetPasswordText(boolean animate, boolean announce) {
+        mPasswordEntry.reset(animate, announce);
     }
 
     @Override
@@ -174,10 +186,10 @@ public abstract class KeyguardPinBasedInputView extends KeyguardAbsKeyInputView
 
         mOkButton = findViewById(R.id.key_enter);
         if (mOkButton != null) {
+            mOkButton.setOnTouchListener(this);
             mOkButton.setOnClickListener(new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
-                    doHapticKeyClick();
                     if (mPasswordEntry.isEnabled()) {
                         verifyPasswordAndUnlock();
                     }
@@ -188,6 +200,7 @@ public abstract class KeyguardPinBasedInputView extends KeyguardAbsKeyInputView
 
         mDeleteButton = findViewById(R.id.delete_button);
         mDeleteButton.setVisibility(View.VISIBLE);
+        mDeleteButton.setOnTouchListener(this);
         mDeleteButton.setOnClickListener(new OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -195,7 +208,6 @@ public abstract class KeyguardPinBasedInputView extends KeyguardAbsKeyInputView
                 if (mPasswordEntry.isEnabled()) {
                     mPasswordEntry.deleteLastChar();
                 }
-                doHapticKeyClick();
             }
         });
         mDeleteButton.setOnLongClickListener(new View.OnLongClickListener() {
@@ -203,7 +215,7 @@ public abstract class KeyguardPinBasedInputView extends KeyguardAbsKeyInputView
             public boolean onLongClick(View v) {
                 // check for time-based lockouts
                 if (mPasswordEntry.isEnabled()) {
-                    resetPasswordText(true /* animate */);
+                    resetPasswordText(true /* animate */, true /* announce */);
                 }
                 doHapticKeyClick();
                 return true;
@@ -226,10 +238,17 @@ public abstract class KeyguardPinBasedInputView extends KeyguardAbsKeyInputView
     }
 
     @Override
+    public boolean onTouch(View v, MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            doHapticKeyClick();
+        }
+        return false;
+    }
+
+    @Override
     public boolean onKey(View v, int keyCode, KeyEvent event) {
         if (event.getAction() == KeyEvent.ACTION_DOWN) {
-            onKeyDown(keyCode, event);
-            return true;
+            return onKeyDown(keyCode, event);
         }
         return false;
     }

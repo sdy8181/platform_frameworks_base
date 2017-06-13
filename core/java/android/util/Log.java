@@ -16,11 +16,15 @@
 
 package android.util;
 
+import android.os.DeadSystemException;
+
 import com.android.internal.os.RuntimeInit;
 import com.android.internal.util.FastPrintWriter;
+import com.android.internal.util.LineBreakBufferedWriter;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.io.Writer;
 import java.net.UnknownHostException;
 
 /**
@@ -85,8 +89,9 @@ public final class Log {
 
     /**
      * Exception class used to capture a stack trace in {@link #wtf}.
+     * @hide
      */
-    private static class TerribleFailure extends Exception {
+    public static class TerribleFailure extends Exception {
         TerribleFailure(String msg, Throwable cause) { super(msg, cause); }
     }
 
@@ -126,7 +131,7 @@ public final class Log {
      * @param tr An exception to log
      */
     public static int v(String tag, String msg, Throwable tr) {
-        return println_native(LOG_ID_MAIN, VERBOSE, tag, msg + '\n' + getStackTraceString(tr));
+        return printlns(LOG_ID_MAIN, VERBOSE, tag, msg, tr);
     }
 
     /**
@@ -147,7 +152,7 @@ public final class Log {
      * @param tr An exception to log
      */
     public static int d(String tag, String msg, Throwable tr) {
-        return println_native(LOG_ID_MAIN, DEBUG, tag, msg + '\n' + getStackTraceString(tr));
+        return printlns(LOG_ID_MAIN, DEBUG, tag, msg, tr);
     }
 
     /**
@@ -168,7 +173,7 @@ public final class Log {
      * @param tr An exception to log
      */
     public static int i(String tag, String msg, Throwable tr) {
-        return println_native(LOG_ID_MAIN, INFO, tag, msg + '\n' + getStackTraceString(tr));
+        return printlns(LOG_ID_MAIN, INFO, tag, msg, tr);
     }
 
     /**
@@ -189,7 +194,7 @@ public final class Log {
      * @param tr An exception to log
      */
     public static int w(String tag, String msg, Throwable tr) {
-        return println_native(LOG_ID_MAIN, WARN, tag, msg + '\n' + getStackTraceString(tr));
+        return printlns(LOG_ID_MAIN, WARN, tag, msg, tr);
     }
 
     /**
@@ -208,7 +213,9 @@ public final class Log {
      * @param tag The tag to check.
      * @param level The level to check.
      * @return Whether or not that this is allowed to be logged.
-     * @throws IllegalArgumentException is thrown if the tag.length() > 23.
+     * @throws IllegalArgumentException is thrown if the tag.length() > 23
+     *         for Nougat (7.0) releases (API <= 23) and prior, there is no
+     *         tag limit of concern after this API level.
      */
     public static native boolean isLoggable(String tag, int level);
 
@@ -219,7 +226,7 @@ public final class Log {
      * @param tr An exception to log
      */
     public static int w(String tag, Throwable tr) {
-        return println_native(LOG_ID_MAIN, WARN, tag, getStackTraceString(tr));
+        return printlns(LOG_ID_MAIN, WARN, tag, "", tr);
     }
 
     /**
@@ -240,7 +247,7 @@ public final class Log {
      * @param tr An exception to log
      */
     public static int e(String tag, String msg, Throwable tr) {
-        return println_native(LOG_ID_MAIN, ERROR, tag, msg + '\n' + getStackTraceString(tr));
+        return printlns(LOG_ID_MAIN, ERROR, tag, msg, tr);
     }
 
     /**
@@ -292,8 +299,7 @@ public final class Log {
         // Only mark this as ERROR, do not use ASSERT since that should be
         // reserved for cases where the system is guaranteed to abort.
         // The onTerribleFailure call does not always cause a crash.
-        int bytes = println_native(logId, ERROR, tag, msg + '\n'
-                + getStackTraceString(localStack ? what : tr));
+        int bytes = printlns(logId, ERROR, tag, msg, localStack ? what : tr);
         sWtfHandler.onTerribleFailure(tag, what, system);
         return bytes;
     }
@@ -365,4 +371,113 @@ public final class Log {
 
     /** @hide */ public static native int println_native(int bufID,
             int priority, String tag, String msg);
+
+    /**
+     * Return the maximum payload the log daemon accepts without truncation.
+     * @return LOGGER_ENTRY_MAX_PAYLOAD.
+     */
+    private static native int logger_entry_max_payload_native();
+
+    /**
+     * Helper function for long messages. Uses the LineBreakBufferedWriter to break
+     * up long messages and stacktraces along newlines, but tries to write in large
+     * chunks. This is to avoid truncation.
+     * @hide
+     */
+    public static int printlns(int bufID, int priority, String tag, String msg,
+            Throwable tr) {
+        ImmediateLogWriter logWriter = new ImmediateLogWriter(bufID, priority, tag);
+        // Acceptable buffer size. Get the native buffer size, subtract two zero terminators,
+        // and the length of the tag.
+        // Note: we implicitly accept possible truncation for Modified-UTF8 differences. It
+        //       is too expensive to compute that ahead of time.
+        int bufferSize = NoPreloadHolder.LOGGER_ENTRY_MAX_PAYLOAD  // Base.
+                - 2                                                // Two terminators.
+                - (tag != null ? tag.length() : 0)                 // Tag length.
+                - 32;                                              // Some slack.
+        // At least assume you can print *some* characters (tag is not too large).
+        bufferSize = Math.max(bufferSize, 100);
+
+        LineBreakBufferedWriter lbbw = new LineBreakBufferedWriter(logWriter, bufferSize);
+
+        lbbw.println(msg);
+
+        if (tr != null) {
+            // This is to reduce the amount of log spew that apps do in the non-error
+            // condition of the network being unavailable.
+            Throwable t = tr;
+            while (t != null) {
+                if (t instanceof UnknownHostException) {
+                    break;
+                }
+                if (t instanceof DeadSystemException) {
+                    lbbw.println("DeadSystemException: The system died; "
+                            + "earlier logs will point to the root cause");
+                    break;
+                }
+                t = t.getCause();
+            }
+            if (t == null) {
+                tr.printStackTrace(lbbw);
+            }
+        }
+
+        lbbw.flush();
+
+        return logWriter.getWritten();
+    }
+
+    /**
+     * NoPreloadHelper class. Caches the LOGGER_ENTRY_MAX_PAYLOAD value to avoid
+     * a JNI call during logging.
+     */
+    static class NoPreloadHolder {
+        public final static int LOGGER_ENTRY_MAX_PAYLOAD =
+                logger_entry_max_payload_native();
+    }
+
+    /**
+     * Helper class to write to the logcat. Different from LogWriter, this writes
+     * the whole given buffer and does not break along newlines.
+     */
+    private static class ImmediateLogWriter extends Writer {
+
+        private int bufID;
+        private int priority;
+        private String tag;
+
+        private int written = 0;
+
+        /**
+         * Create a writer that immediately writes to the log, using the given
+         * parameters.
+         */
+        public ImmediateLogWriter(int bufID, int priority, String tag) {
+            this.bufID = bufID;
+            this.priority = priority;
+            this.tag = tag;
+        }
+
+        public int getWritten() {
+            return written;
+        }
+
+        @Override
+        public void write(char[] cbuf, int off, int len) {
+            // Note: using String here has a bit of overhead as a Java object is created,
+            //       but using the char[] directly is not easier, as it needs to be translated
+            //       to a C char[] for logging.
+            written += println_native(bufID, priority, tag, new String(cbuf, off, len));
+        }
+
+        @Override
+        public void flush() {
+            // Ignored.
+        }
+
+        @Override
+        public void close() {
+            // Ignored.
+        }
+    }
 }

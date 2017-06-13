@@ -19,6 +19,7 @@ trainingnavtop=true
     <ul>
     <li><a href="{@docRoot}distribute/tools/localization-checklist.html">Localization Checklist</a></li>
       <li><a href="{@docRoot}guide/topics/resources/localization.html">Localization with Resources</a></li>
+      <li><a href="https://support.google.com/l10n/answer/6359997">App Translation Service</a></li>
     </ul>
   </div>
 </div>
@@ -35,12 +36,12 @@ types. There are also a few default files such as <code>res/values/strings.xml</
 your string values.</p>
 
 
-<h2 id="CreateDirs">Create Locale Directories and String Files</h2> 
+<h2 id="CreateDirs">Create Locale Directories and String Files</h2>
 
 <p>To add support for more languages, create additional <code>values</code> directories inside
 <code>res/</code> that include a hyphen and the ISO language code at the end of the
 directory name. For example, <code>values-es/</code> is the directory containing simple
-resourcess for the Locales with the language code "es".  Android loads the appropriate resources
+resources for the Locales with the language code "es".  Android loads the appropriate resources
 according to the locale settings of the device at run time. For more information, see
  <a href="{@docRoot}guide/topics/resources/providing-resources.html#AlternativeResources">Providing Alternative Resources</a>.</p>
 
@@ -62,7 +63,7 @@ MyProject/
 
 <p>At runtime, the Android system uses the appropriate set of string resources based on the
 locale currently set for the user's device.</p>
-  
+
 <p>For example, the following are some different string resource files for different languages.</p>
 
 
@@ -111,7 +112,7 @@ resource name defined by the {@code <string>} element's {@code name} attribute.<
 <p>In your source code, you can refer to a string resource with the syntax {@code
 R.string.<string_name>}. There are a variety of methods that accept a string resource this
 way.</p>
-  
+
 <p>For example:</p>
 
 <pre>

@@ -49,7 +49,7 @@ use the Android SDK Manager to download the platform into your SDK.</p>
 <div class="toggle-content closed">
 
   <p><a href="#" onclick="return toggleContent(this)">
-    <img src="{@docRoot}assets/images/triangle-closed.png"
+    <img src="{@docRoot}assets/images/styles/disclosure_down.png"
 class="toggle-content-img" alt="" />
     <strong>Table of Contents</strong>
   </a></p>
@@ -99,7 +99,7 @@ device.</p>
 <h4>User Profile</h4>
 
 <p>Android now includes a personal profile that represents the device owner, as defined by the
-{@link android.provider.ContactsContract.Profile} table.  Social apps that maintain a user identity 
+{@link android.provider.ContactsContract.Profile} table.  Social apps that maintain a user identity
 can contribute to the user's profile data by creating a new {@link
 android.provider.ContactsContract.RawContacts} entry within the {@link
 android.provider.ContactsContract.Profile}. That is, raw contacts that represent the device user do
@@ -210,7 +210,7 @@ used by the sync adapter. The provider takes no action with items in this table 
 them when their related events are deleted.</li>
 </ul>
 
-<p>To access a user’s calendar data with the Calendar Provider, your application must request 
+<p>To access a user’s calendar data with the Calendar Provider, your application must request
 the {@link android.Manifest.permission#READ_CALENDAR} permission (for read access) and
 {@link android.Manifest.permission#WRITE_CALENDAR} (for write access).</p>
 
@@ -309,7 +309,7 @@ EffectContext.createWithCurrentGlContext()} from your OpenGL ES 2.0 context.</li
 android.media.effect.EffectContext#getFactory EffectContext.getFactory()}, which returns an instance
 of {@link android.media.effect.EffectFactory}.</li>
 <li>Call {@link android.media.effect.EffectFactory#createEffect createEffect()}, passing it an
-effect name from @link android.media.effect.EffectFactory}, such as {@link
+effect name from {@link android.media.effect.EffectFactory}, such as {@link
 android.media.effect.EffectFactory#EFFECT_FISHEYE} or {@link
 android.media.effect.EffectFactory#EFFECT_VIGNETTE}.</li>
 </ol>
@@ -850,7 +850,7 @@ android.view.accessibility.AccessibilityRecord} (there may be several records at
 event).</li>
 
 <li>From either {@link android.view.accessibility.AccessibilityEvent} or an individual {@link
-android.view.accessibility.AccessibilityRecord}, you can call {@link 
+android.view.accessibility.AccessibilityRecord}, you can call {@link
 android.view.accessibility.AccessibilityRecord#getSource() getSource()} to retrieve a {@link
 android.view.accessibility.AccessibilityNodeInfo} object.
   <p>An {@link android.view.accessibility.AccessibilityNodeInfo} represents a single node

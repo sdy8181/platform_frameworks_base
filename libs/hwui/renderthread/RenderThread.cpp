@@ -20,17 +20,17 @@
 #include "CanvasContext.h"
 #include "EglManager.h"
 #include "RenderProxy.h"
+#include "utils/FatVector.h"
 
 #include <gui/DisplayEventReceiver.h>
 #include <gui/ISurfaceComposer.h>
 #include <gui/SurfaceComposerClient.h>
 #include <sys/resource.h>
+#include <utils/Condition.h>
 #include <utils/Log.h>
+#include <utils/Mutex.h>
 
 namespace android {
-using namespace uirenderer::renderthread;
-ANDROID_SINGLETON_STATIC_INSTANCE(RenderThread);
-
 namespace uirenderer {
 namespace renderthread {
 
@@ -136,7 +136,22 @@ public:
     }
 };
 
-RenderThread::RenderThread() : Thread(true), Singleton<RenderThread>()
+static bool gHasRenderThreadInstance = false;
+
+bool RenderThread::hasInstance() {
+    return gHasRenderThreadInstance;
+}
+
+RenderThread& RenderThread::getInstance() {
+    // This is a pointer because otherwise __cxa_finalize
+    // will try to delete it like a Good Citizen but that causes us to crash
+    // because we don't want to delete the RenderThread normally.
+    static RenderThread* sInstance = new RenderThread();
+    gHasRenderThreadInstance = true;
+    return *sInstance;
+}
+
+RenderThread::RenderThread() : Thread(true)
         , mNextWakeup(LLONG_MAX)
         , mDisplayEventReceiver(nullptr)
         , mVsyncRequested(false)
@@ -176,7 +191,7 @@ void RenderThread::initThreadLocals() {
     initializeDisplayEventReceiver();
     mEglManager = new EglManager(*this);
     mRenderState = new RenderState(*this);
-    mJankTracker = new JankTracker(frameIntervalNanos);
+    mJankTracker = new JankTracker(mDisplayInfo);
 }
 
 int RenderThread::displayEventReceiverCallback(int fd, int events, void* data) {
@@ -268,10 +283,18 @@ bool RenderThread::threadLoop() {
                 "RenderThread Looper POLL_ERROR!");
 
         nsecs_t nextWakeup;
-        // Process our queue, if we have anything
-        while (RenderTask* task = nextTask(&nextWakeup)) {
-            task->run();
-            // task may have deleted itself, do not reference it again
+        {
+            FatVector<RenderTask*, 10> workQueue;
+            // Process our queue, if we have anything. By first acquiring
+            // all the pending events then processing them we avoid vsync
+            // starvation if more tasks are queued while we are processing tasks.
+            while (RenderTask* task = nextTask(&nextWakeup)) {
+                workQueue.push_back(task);
+            }
+            for (auto task : workQueue) {
+                task->run();
+                // task may have deleted itself, do not reference it again
+            }
         }
         if (nextWakeup == LLONG_MAX) {
             timeoutMillis = -1;
@@ -309,6 +332,21 @@ void RenderThread::queue(RenderTask* task) {
     if (mNextWakeup && task->mRunAt < mNextWakeup) {
         mNextWakeup = 0;
         mLooper->wake();
+    }
+}
+
+void RenderThread::queueAndWait(RenderTask* task) {
+    // These need to be local to the thread to avoid the Condition
+    // signaling the wrong thread. The easiest way to achieve that is to just
+    // make this on the stack, although that has a slight cost to it
+    Mutex mutex;
+    Condition condition;
+    SignalingRenderTask syncTask(task, &mutex, &condition);
+
+    AutoMutex _lock(mutex);
+    queue(&syncTask);
+    while (!syncTask.hasRun()) {
+        condition.wait(mutex);
     }
 }
 

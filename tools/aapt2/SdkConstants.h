@@ -42,9 +42,10 @@ enum {
     SDK_KITKAT_WATCH = 20,
     SDK_LOLLIPOP = 21,
     SDK_LOLLIPOP_MR1 = 22,
+    SDK_MARSHMALLOW = 23,
 };
 
-size_t findAttributeSdkLevel(ResourceId id);
+size_t findAttributeSdkLevel(const ResourceId& id);
 size_t findAttributeSdkLevel(const ResourceName& name);
 
 } // namespace aapt

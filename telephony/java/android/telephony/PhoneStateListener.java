@@ -20,18 +20,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
-import android.telephony.SubscriptionManager;
-import android.telephony.CellLocation;
-import android.telephony.CellInfo;
-import android.telephony.VoLteServiceState;
-import android.telephony.Rlog;
-import android.telephony.ServiceState;
-import android.telephony.SignalStrength;
-import android.telephony.PreciseCallState;
-import android.telephony.PreciseDataConnectionState;
 
 import com.android.internal.telephony.IPhoneStateListener;
+
 import java.util.List;
+import java.lang.ref.WeakReference;
 
 /**
  * A listener class for monitoring changes in specific telephony states
@@ -194,10 +187,12 @@ public class PhoneStateListener {
      * {@more}
      * Requires Permission: {@link android.Manifest.permission#READ_PRECISE_PHONE_STATE
      * READ_PRECISE_PHONE_STATE}
-     *
      * @see #onDataConnectionRealTimeInfoChanged(DataConnectionRealTimeInfo)
+     *
+     * @deprecated Use {@link TelephonyManager#getModemActivityInfo()}
      * @hide
      */
+    @Deprecated
     public static final int LISTEN_DATA_CONNECTION_REAL_TIME_INFO           = 0x00002000;
 
     /**
@@ -213,7 +208,9 @@ public class PhoneStateListener {
      *
      * @see #onOemHookRawEvent
      * @hide
+     * @deprecated OEM needs a vendor-extension hal and their apps should use that instead
      */
+    @Deprecated
     public static final int LISTEN_OEM_HOOK_RAW_EVENT                       = 0x00008000;
 
     /**
@@ -225,12 +222,44 @@ public class PhoneStateListener {
      */
     public static final int LISTEN_CARRIER_NETWORK_CHANGE                   = 0x00010000;
 
+    /**
+     *  Listen for changes to the sim voice activation state
+     *  @see TelephonyManager#SIM_ACTIVATION_STATE_ACTIVATING
+     *  @see TelephonyManager#SIM_ACTIVATION_STATE_ACTIVATED
+     *  @see TelephonyManager#SIM_ACTIVATION_STATE_DEACTIVATED
+     *  @see TelephonyManager#SIM_ACTIVATION_STATE_RESTRICTED
+     *  @see TelephonyManager#SIM_ACTIVATION_STATE_UNKNOWN
+     *  {@more}
+     *  Example: TelephonyManager#SIM_ACTIVATION_STATE_ACTIVATED indicates voice service has been
+     *  fully activated
+     *
+     *  @see #onVoiceActivationStateChanged
+     *  @hide
+     */
+    public static final int LISTEN_VOICE_ACTIVATION_STATE                   = 0x00020000;
+
+    /**
+     *  Listen for changes to the sim data activation state
+     *  @see TelephonyManager#SIM_ACTIVATION_STATE_ACTIVATING
+     *  @see TelephonyManager#SIM_ACTIVATION_STATE_ACTIVATED
+     *  @see TelephonyManager#SIM_ACTIVATION_STATE_DEACTIVATED
+     *  @see TelephonyManager#SIM_ACTIVATION_STATE_RESTRICTED
+     *  @see TelephonyManager#SIM_ACTIVATION_STATE_UNKNOWN
+     *  {@more}
+     *  Example: TelephonyManager#SIM_ACTIVATION_STATE_ACTIVATED indicates data service has been
+     *  fully activated
+     *
+     *  @see #onDataActivationStateChanged
+     *  @hide
+     */
+    public static final int LISTEN_DATA_ACTIVATION_STATE                   = 0x00040000;
+
      /*
      * Subscription used to listen to the phone state changes
      * @hide
      */
     /** @hide */
-    protected int mSubId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
+    protected Integer mSubId;
 
     private final Handler mHandler;
 
@@ -239,7 +268,7 @@ public class PhoneStateListener {
      * This class requires Looper.myLooper() not return null.
      */
     public PhoneStateListener() {
-        this(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, Looper.myLooper());
+        this(null, Looper.myLooper());
     }
 
     /**
@@ -248,7 +277,7 @@ public class PhoneStateListener {
      * @hide
      */
     public PhoneStateListener(Looper looper) {
-        this(SubscriptionManager.DEFAULT_SUBSCRIPTION_ID, looper);
+        this(null, looper);
     }
 
     /**
@@ -257,7 +286,7 @@ public class PhoneStateListener {
      * own non-null Looper use PhoneStateListener(int subId, Looper looper) below.
      * @hide
      */
-    public PhoneStateListener(int subId) {
+    public PhoneStateListener(Integer subId) {
         this(subId, Looper.myLooper());
     }
 
@@ -266,7 +295,7 @@ public class PhoneStateListener {
      * and non-null Looper.
      * @hide
      */
-    public PhoneStateListener(int subId, Looper looper) {
+    public PhoneStateListener(Integer subId, Looper looper) {
         if (DBG) log("ctor: subId=" + subId + " looper=" + looper);
         mSubId = subId;
         mHandler = new Handler(looper) {
@@ -323,6 +352,12 @@ public class PhoneStateListener {
                         break;
                     case LISTEN_VOLTE_STATE:
                         PhoneStateListener.this.onVoLteServiceStateChanged((VoLteServiceState)msg.obj);
+                        break;
+                    case LISTEN_VOICE_ACTIVATION_STATE:
+                        PhoneStateListener.this.onVoiceActivationStateChanged((int)msg.obj);
+                        break;
+                    case LISTEN_DATA_ACTIVATION_STATE:
+                        PhoneStateListener.this.onDataActivationStateChanged((int)msg.obj);
                         break;
                     case LISTEN_OEM_HOOK_RAW_EVENT:
                         PhoneStateListener.this.onOemHookRawEvent((byte[])msg.obj);
@@ -503,6 +538,24 @@ public class PhoneStateListener {
     }
 
     /**
+     * Callback invoked when the SIM voice activation state has changed
+     * @param state is the current SIM voice activation state
+     * @hide
+     */
+    public void onVoiceActivationStateChanged(int state) {
+
+    }
+
+    /**
+     * Callback invoked when the SIM data activation state has changed
+     * @param state is the current SIM data activation state
+     * @hide
+     */
+    public void onDataActivationStateChanged(int state) {
+
+    }
+
+    /**
      * Callback invoked when OEM hook raw event is received. Requires
      * the READ_PRIVILEGED_PHONE_STATE permission.
      * @param rawData is the byte array of the OEM hook raw data.
@@ -531,84 +584,109 @@ public class PhoneStateListener {
     /**
      * The callback methods need to be called on the handler thread where
      * this object was created.  If the binder did that for us it'd be nice.
+     *
+     * Using a static class and weak reference here to avoid memory leak caused by the
+     * IPhoneStateListener.Stub callback retaining references to the outside PhoneStateListeners:
+     * even caller has been destroyed and "un-registered" the PhoneStateListener, it is still not
+     * eligible for GC given the references coming from:
+     * Native Stack --> PhoneStateListener --> Context (Activity).
+     * memory of caller's context will be collected after GC from service side get triggered
      */
-    IPhoneStateListener callback = new IPhoneStateListener.Stub() {
+    private static class IPhoneStateListenerStub extends IPhoneStateListener.Stub {
+        private WeakReference<PhoneStateListener> mPhoneStateListenerWeakRef;
+
+        public IPhoneStateListenerStub(PhoneStateListener phoneStateListener) {
+            mPhoneStateListenerWeakRef = new WeakReference<PhoneStateListener>(phoneStateListener);
+        }
+
+        private void send(int what, int arg1, int arg2, Object obj) {
+            PhoneStateListener listener = mPhoneStateListenerWeakRef.get();
+            if (listener != null) {
+                Message.obtain(listener.mHandler, what, arg1, arg2, obj).sendToTarget();
+            }
+        }
+
         public void onServiceStateChanged(ServiceState serviceState) {
-            Message.obtain(mHandler, LISTEN_SERVICE_STATE, 0, 0, serviceState).sendToTarget();
+            send(LISTEN_SERVICE_STATE, 0, 0, serviceState);
         }
 
         public void onSignalStrengthChanged(int asu) {
-            Message.obtain(mHandler, LISTEN_SIGNAL_STRENGTH, asu, 0, null).sendToTarget();
+            send(LISTEN_SIGNAL_STRENGTH, asu, 0, null);
         }
 
         public void onMessageWaitingIndicatorChanged(boolean mwi) {
-            Message.obtain(mHandler, LISTEN_MESSAGE_WAITING_INDICATOR, mwi ? 1 : 0, 0, null)
-                    .sendToTarget();
+            send(LISTEN_MESSAGE_WAITING_INDICATOR, mwi ? 1 : 0, 0, null);
         }
 
         public void onCallForwardingIndicatorChanged(boolean cfi) {
-            Message.obtain(mHandler, LISTEN_CALL_FORWARDING_INDICATOR, cfi ? 1 : 0, 0, null)
-                    .sendToTarget();
+            send(LISTEN_CALL_FORWARDING_INDICATOR, cfi ? 1 : 0, 0, null);
         }
 
         public void onCellLocationChanged(Bundle bundle) {
             CellLocation location = CellLocation.newFromBundle(bundle);
-            Message.obtain(mHandler, LISTEN_CELL_LOCATION, 0, 0, location).sendToTarget();
+            send(LISTEN_CELL_LOCATION, 0, 0, location);
         }
 
         public void onCallStateChanged(int state, String incomingNumber) {
-            Message.obtain(mHandler, LISTEN_CALL_STATE, state, 0, incomingNumber).sendToTarget();
+            send(LISTEN_CALL_STATE, state, 0, incomingNumber);
         }
 
         public void onDataConnectionStateChanged(int state, int networkType) {
-            Message.obtain(mHandler, LISTEN_DATA_CONNECTION_STATE, state, networkType).
-                    sendToTarget();
+            send(LISTEN_DATA_CONNECTION_STATE, state, networkType, null);
         }
 
         public void onDataActivity(int direction) {
-            Message.obtain(mHandler, LISTEN_DATA_ACTIVITY, direction, 0, null).sendToTarget();
+            send(LISTEN_DATA_ACTIVITY, direction, 0, null);
         }
 
         public void onSignalStrengthsChanged(SignalStrength signalStrength) {
-            Message.obtain(mHandler, LISTEN_SIGNAL_STRENGTHS, 0, 0, signalStrength).sendToTarget();
+            send(LISTEN_SIGNAL_STRENGTHS, 0, 0, signalStrength);
         }
 
         public void onOtaspChanged(int otaspMode) {
-            Message.obtain(mHandler, LISTEN_OTASP_CHANGED, otaspMode, 0).sendToTarget();
+            send(LISTEN_OTASP_CHANGED, otaspMode, 0, null);
         }
 
         public void onCellInfoChanged(List<CellInfo> cellInfo) {
-            Message.obtain(mHandler, LISTEN_CELL_INFO, 0, 0, cellInfo).sendToTarget();
+            send(LISTEN_CELL_INFO, 0, 0, cellInfo);
         }
 
         public void onPreciseCallStateChanged(PreciseCallState callState) {
-            Message.obtain(mHandler, LISTEN_PRECISE_CALL_STATE, 0, 0, callState).sendToTarget();
+            send(LISTEN_PRECISE_CALL_STATE, 0, 0, callState);
         }
 
         public void onPreciseDataConnectionStateChanged(
                 PreciseDataConnectionState dataConnectionState) {
-            Message.obtain(mHandler, LISTEN_PRECISE_DATA_CONNECTION_STATE, 0, 0,
-                    dataConnectionState).sendToTarget();
+            send(LISTEN_PRECISE_DATA_CONNECTION_STATE, 0, 0, dataConnectionState);
         }
 
         public void onDataConnectionRealTimeInfoChanged(
                 DataConnectionRealTimeInfo dcRtInfo) {
-            Message.obtain(mHandler, LISTEN_DATA_CONNECTION_REAL_TIME_INFO, 0, 0,
-                    dcRtInfo).sendToTarget();
+            send(LISTEN_DATA_CONNECTION_REAL_TIME_INFO, 0, 0, dcRtInfo);
         }
 
         public void onVoLteServiceStateChanged(VoLteServiceState lteState) {
-            Message.obtain(mHandler, LISTEN_VOLTE_STATE, 0, 0, lteState).sendToTarget();
+            send(LISTEN_VOLTE_STATE, 0, 0, lteState);
+        }
+
+        public void onVoiceActivationStateChanged(int activationState) {
+            send(LISTEN_VOICE_ACTIVATION_STATE, 0, 0, activationState);
+        }
+
+        public void onDataActivationStateChanged(int activationState) {
+            send(LISTEN_DATA_ACTIVATION_STATE, 0, 0, activationState);
         }
 
         public void onOemHookRawEvent(byte[] rawData) {
-            Message.obtain(mHandler, LISTEN_OEM_HOOK_RAW_EVENT, 0, 0, rawData).sendToTarget();
+            send(LISTEN_OEM_HOOK_RAW_EVENT, 0, 0, rawData);
         }
 
         public void onCarrierNetworkChange(boolean active) {
-            Message.obtain(mHandler, LISTEN_CARRIER_NETWORK_CHANGE, 0, 0, active).sendToTarget();
+            send(LISTEN_CARRIER_NETWORK_CHANGE, 0, 0, active);
         }
-    };
+    }
+
+    IPhoneStateListener callback = new IPhoneStateListenerStub(this);
 
     private void log(String s) {
         Rlog.d(LOG_TAG, s);

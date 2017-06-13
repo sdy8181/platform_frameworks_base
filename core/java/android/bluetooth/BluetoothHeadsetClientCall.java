@@ -18,6 +18,7 @@ package android.bluetooth;
 
 import android.os.Parcel;
 import android.os.Parcelable;
+import android.os.SystemClock;
 
 import java.util.UUID;
 
@@ -70,6 +71,7 @@ public final class BluetoothHeadsetClientCall implements Parcelable {
     private boolean mMultiParty;
     private final boolean mOutgoing;
     private final UUID mUUID;
+    private final long mCreationElapsedMilli;
 
     /**
      * Creates BluetoothHeadsetClientCall instance.
@@ -88,6 +90,7 @@ public final class BluetoothHeadsetClientCall implements Parcelable {
         mNumber = number != null ? number : "";
         mMultiParty = multiParty;
         mOutgoing = outgoing;
+        mCreationElapsedMilli = SystemClock.elapsedRealtime();
     }
 
     /**
@@ -171,6 +174,15 @@ public final class BluetoothHeadsetClientCall implements Parcelable {
     }
 
     /**
+     * Gets call's creation time in millis since epoch.
+     *
+     * @return long representing the creation time.
+     */
+    public long getCreationElapsedMilli() {
+        return mCreationElapsedMilli;
+    }
+
+    /**
      * Checks if call is an active call in a conference mode (aka multi party).
      *
      * @return <code>true</code> if call is a multi party call,
@@ -196,7 +208,7 @@ public final class BluetoothHeadsetClientCall implements Parcelable {
 
     public String toString(boolean loggable) {
         StringBuilder builder = new StringBuilder("BluetoothHeadsetClientCall{mDevice: ");
-        builder.append(loggable ? mDevice.hashCode() : mDevice);
+        builder.append(loggable ? mDevice : mDevice.hashCode());
         builder.append(", mId: ");
         builder.append(mId);
         builder.append(", mUUID: ");
@@ -214,7 +226,7 @@ public final class BluetoothHeadsetClientCall implements Parcelable {
             default: builder.append(mState); break;
         }
         builder.append(", mNumber: ");
-        builder.append(loggable ? mNumber.hashCode() : mNumber);
+        builder.append(loggable ? mNumber : mNumber.hashCode());
         builder.append(", mMultiParty: ");
         builder.append(mMultiParty);
         builder.append(", mOutgoing: ");

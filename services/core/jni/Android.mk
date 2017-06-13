@@ -16,18 +16,22 @@ LOCAL_SRC_FILES += \
     $(LOCAL_REL_DIR)/com_android_server_am_ActivityManagerService.cpp \
     $(LOCAL_REL_DIR)/com_android_server_AssetAtlasService.cpp \
     $(LOCAL_REL_DIR)/com_android_server_connectivity_Vpn.cpp \
+    $(LOCAL_REL_DIR)/com_android_server_connectivity_tethering_OffloadHardwareInterface.cpp \
     $(LOCAL_REL_DIR)/com_android_server_ConsumerIrService.cpp \
+    $(LOCAL_REL_DIR)/com_android_server_HardwarePropertiesManagerService.cpp \
     $(LOCAL_REL_DIR)/com_android_server_hdmi_HdmiCecController.cpp \
     $(LOCAL_REL_DIR)/com_android_server_input_InputApplicationHandle.cpp \
     $(LOCAL_REL_DIR)/com_android_server_input_InputManagerService.cpp \
     $(LOCAL_REL_DIR)/com_android_server_input_InputWindowHandle.cpp \
     $(LOCAL_REL_DIR)/com_android_server_lights_LightsService.cpp \
-    $(LOCAL_REL_DIR)/com_android_server_location_GpsLocationProvider.cpp \
+    $(LOCAL_REL_DIR)/com_android_server_location_GnssLocationProvider.cpp \
     $(LOCAL_REL_DIR)/com_android_server_location_FlpHardwareProvider.cpp \
     $(LOCAL_REL_DIR)/com_android_server_power_PowerManagerService.cpp \
     $(LOCAL_REL_DIR)/com_android_server_SerialService.cpp \
     $(LOCAL_REL_DIR)/com_android_server_SystemServer.cpp \
+    $(LOCAL_REL_DIR)/com_android_server_tv_TvUinputBridge.cpp \
     $(LOCAL_REL_DIR)/com_android_server_tv_TvInputHal.cpp \
+    $(LOCAL_REL_DIR)/com_android_server_vr_VrManagerService.cpp \
     $(LOCAL_REL_DIR)/com_android_server_UsbDeviceManager.cpp \
     $(LOCAL_REL_DIR)/com_android_server_UsbMidiDevice.cpp \
     $(LOCAL_REL_DIR)/com_android_server_UsbHostManager.cpp \
@@ -42,8 +46,6 @@ LOCAL_C_INCLUDES += \
     frameworks/base/libs/hwui \
     frameworks/base/core/jni \
     frameworks/native/services \
-    libcore/include \
-    libcore/include/libsuspend \
     system/security/keystore/include \
     $(call include-path-for, libhardware)/hardware \
     $(call include-path-for, libhardware_legacy)/hardware_legacy \
@@ -51,11 +53,15 @@ LOCAL_C_INCLUDES += \
 LOCAL_SHARED_LIBRARIES += \
     libandroid_runtime \
     libandroidfw \
+    libbase \
     libbinder \
     libcutils \
     liblog \
     libhardware \
     libhardware_legacy \
+    libhidlbase \
+    libhidltransport \
+    libhwbinder \
     libkeystore_binder \
     libnativehelper \
     libutils \
@@ -71,4 +77,5 @@ LOCAL_SHARED_LIBRARIES += \
     libEGL \
     libGLESv2 \
     libnetutils \
+    android.hardware.tetheroffload.config@1.0 \
 

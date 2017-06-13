@@ -17,6 +17,7 @@
 package com.android.server;
 
 import android.os.Handler;
+import android.os.Trace;
 
 /**
  * Shared singleton foreground thread for the system.  This is a thread for regular
@@ -38,19 +39,20 @@ public final class FgThread extends ServiceThread {
         if (sInstance == null) {
             sInstance = new FgThread();
             sInstance.start();
+            sInstance.getLooper().setTraceTag(Trace.TRACE_TAG_ACTIVITY_MANAGER);
             sHandler = new Handler(sInstance.getLooper());
         }
     }
 
     public static FgThread get() {
-        synchronized (UiThread.class) {
+        synchronized (FgThread.class) {
             ensureThreadLocked();
             return sInstance;
         }
     }
 
     public static Handler getHandler() {
-        synchronized (UiThread.class) {
+        synchronized (FgThread.class) {
             ensureThreadLocked();
             return sHandler;
         }

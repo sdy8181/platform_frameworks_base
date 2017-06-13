@@ -20,8 +20,7 @@ import android.app.Instrumentation;
 import android.content.Context;
 import android.os.PerformanceCollector.PerformanceResultsWriter;
 
-import com.google.android.collect.Lists;
-
+import java.util.ArrayList;
 import junit.framework.Test;
 import junit.framework.TestCase;
 import junit.framework.TestListener;
@@ -33,6 +32,13 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 
+/**
+ * @deprecated Use
+ * <a href="{@docRoot}reference/android/support/test/runner/AndroidJUnitRunner.html">
+ * AndroidJUnitRunner</a> instead. New tests should be written using the
+ * <a href="{@docRoot}tools/testing-support-library/index.html">Android Testing Support Library</a>.
+ */
+@Deprecated
 public class AndroidTestRunner extends BaseTestRunner {
 
     private TestResult mTestResult;
@@ -41,7 +47,7 @@ public class AndroidTestRunner extends BaseTestRunner {
     private Context mContext;
     private boolean mSkipExecution = false;
 
-    private List<TestListener> mTestListeners = Lists.newArrayList();
+    private List<TestListener> mTestListeners = new ArrayList<>();
     private Instrumentation mInstrumentation;
     private PerformanceResultsWriter mPerfWriter;
 
@@ -51,7 +57,8 @@ public class AndroidTestRunner extends BaseTestRunner {
 
         if (shouldRunSingleTestMethod(testMethodName, testClass)) {
             TestCase testCase = buildSingleTestMethod(testClass, testMethodName);
-            mTestCases = Lists.newArrayList(testCase);
+            mTestCases = new ArrayList<>();
+            mTestCases.add(testCase);
             mTestClassName = testClass.getSimpleName();
         } else {
             setTest(getTest(testClass), testClass);

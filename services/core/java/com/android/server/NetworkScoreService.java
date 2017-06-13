@@ -16,38 +16,67 @@
 
 package com.android.server;
 
+import static android.net.NetworkRecommendationProvider.EXTRA_RECOMMENDATION_RESULT;
+import static android.net.NetworkRecommendationProvider.EXTRA_SEQUENCE;
+
 import android.Manifest.permission;
+import android.annotation.Nullable;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
+import android.database.ContentObserver;
+import android.net.INetworkRecommendationProvider;
 import android.net.INetworkScoreCache;
 import android.net.INetworkScoreService;
+import android.net.NetworkKey;
 import android.net.NetworkScoreManager;
 import android.net.NetworkScorerAppManager;
 import android.net.NetworkScorerAppManager.NetworkScorerAppData;
+import android.net.RecommendationRequest;
+import android.net.RecommendationResult;
 import android.net.ScoredNetwork;
+import android.net.Uri;
 import android.os.Binder;
-import android.os.PatternMatcher;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.IRemoteCallback;
+import android.os.Looper;
+import android.os.Message;
+import android.os.RemoteCallback;
+import android.os.RemoteCallbackList;
 import android.os.RemoteException;
 import android.os.UserHandle;
 import android.provider.Settings;
-import android.text.TextUtils;
+import android.provider.Settings.Global;
+import android.util.ArrayMap;
 import android.util.Log;
+import android.util.Pair;
+import android.util.TimedRemoteCaller;
 
-import com.android.internal.R;
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.content.PackageMonitor;
+import com.android.internal.os.TransferPipe;
 
 import java.io.FileDescriptor;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 /**
  * Backing service for {@link android.net.NetworkScoreManager}.
@@ -55,139 +84,358 @@ import java.util.Set;
  */
 public class NetworkScoreService extends INetworkScoreService.Stub {
     private static final String TAG = "NetworkScoreService";
+    private static final boolean DBG = Build.IS_DEBUGGABLE && Log.isLoggable(TAG, Log.DEBUG);
 
     private final Context mContext;
+    private final NetworkScorerAppManager mNetworkScorerAppManager;
+    private final AtomicReference<RequestRecommendationCaller> mReqRecommendationCallerRef;
+    @GuardedBy("mScoreCaches")
+    private final Map<Integer, RemoteCallbackList<INetworkScoreCache>> mScoreCaches;
+    /** Lock used to update mPackageMonitor when scorer package changes occur. */
+    private final Object mPackageMonitorLock = new Object();
+    private final Object mServiceConnectionLock = new Object();
+    private final Handler mHandler;
+    private final DispatchingContentObserver mContentObserver;
 
-    private final Map<Integer, INetworkScoreCache> mScoreCaches;
+    @GuardedBy("mPackageMonitorLock")
+    private NetworkScorerPackageMonitor mPackageMonitor;
+    @GuardedBy("mServiceConnectionLock")
+    private ScoringServiceConnection mServiceConnection;
+    private volatile long mRecommendationRequestTimeoutMs;
 
-    /** Lock used to update mReceiver when scorer package changes occur. */
-    private Object mReceiverLock = new Object[0];
+    private BroadcastReceiver mUserIntentReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            final String action = intent.getAction();
+            final int userId = intent.getIntExtra(Intent.EXTRA_USER_HANDLE, UserHandle.USER_NULL);
+            if (DBG) Log.d(TAG, "Received " + action + " for userId " + userId);
+            if (userId == UserHandle.USER_NULL) return;
 
-    /** Clears scores when the active scorer package is no longer valid. */
-    @GuardedBy("mReceiverLock")
-    private ScorerChangedReceiver mReceiver;
+            if (Intent.ACTION_USER_UNLOCKED.equals(action)) {
+                onUserUnlocked(userId);
+            }
+        }
+    };
 
-    private class ScorerChangedReceiver extends BroadcastReceiver {
-        final String mRegisteredPackage;
+    /**
+     * Clears scores when the active scorer package is no longer valid and
+     * manages the service connection.
+     */
+    private class NetworkScorerPackageMonitor extends PackageMonitor {
+        final List<String> mPackagesToWatch;
 
-        ScorerChangedReceiver(String packageName) {
-            mRegisteredPackage = packageName;
+        private NetworkScorerPackageMonitor(List<String> packagesToWatch) {
+            mPackagesToWatch = packagesToWatch;
         }
 
         @Override
-        public void onReceive(Context context, Intent intent) {
-            String action = intent.getAction();
-            if ((Intent.ACTION_PACKAGE_CHANGED.equals(action) ||
-                    Intent.ACTION_PACKAGE_REPLACED.equals(action) ||
-                    Intent.ACTION_PACKAGE_FULLY_REMOVED.equals(action)) &&
-                    NetworkScorerAppManager.getActiveScorer(mContext) == null) {
-                // Package change has invalidated a scorer.
-                Log.i(TAG, "Package " + mRegisteredPackage +
-                        " is no longer valid, disabling scoring");
-                setScorerInternal(null);
+        public void onPackageAdded(String packageName, int uid) {
+            evaluateBinding(packageName, true /* forceUnbind */);
+        }
+
+        @Override
+        public void onPackageRemoved(String packageName, int uid) {
+            evaluateBinding(packageName, true /* forceUnbind */);
+        }
+
+        @Override
+        public void onPackageModified(String packageName) {
+            evaluateBinding(packageName, false /* forceUnbind */);
+        }
+
+        @Override
+        public boolean onHandleForceStop(Intent intent, String[] packages, int uid, boolean doit) {
+            if (doit) { // "doit" means the force stop happened instead of just being queried for.
+                for (String packageName : packages) {
+                    evaluateBinding(packageName, true /* forceUnbind */);
+                }
+            }
+            return super.onHandleForceStop(intent, packages, uid, doit);
+        }
+
+        @Override
+        public void onPackageUpdateFinished(String packageName, int uid) {
+            evaluateBinding(packageName, true /* forceUnbind */);
+        }
+
+        private void evaluateBinding(String scorerPackageName, boolean forceUnbind) {
+            if (!mPackagesToWatch.contains(scorerPackageName)) {
+                // Early exit when we don't care about the package that has changed.
+                return;
+            }
+
+            if (DBG) {
+                Log.d(TAG, "Evaluating binding for: " + scorerPackageName
+                        + ", forceUnbind=" + forceUnbind);
+            }
+            final NetworkScorerAppData activeScorer = mNetworkScorerAppManager.getActiveScorer();
+            if (activeScorer == null) {
+                // Package change has invalidated a scorer, this will also unbind any service
+                // connection.
+                if (DBG) Log.d(TAG, "No active scorers available.");
+                unbindFromScoringServiceIfNeeded();
+            } else if (activeScorer.packageName.equals(scorerPackageName)) {
+                // The active scoring service changed in some way.
+                if (DBG) {
+                    Log.d(TAG, "Possible change to the active scorer: "
+                            + activeScorer.packageName);
+                }
+                if (forceUnbind) {
+                    unbindFromScoringServiceIfNeeded();
+                }
+                bindToScoringServiceIfNeeded(activeScorer);
+            } else {
+                // One of the scoring apps on the device has changed and we may no longer be
+                // bound to the correct scoring app. The logic in bindToScoringServiceIfNeeded()
+                // will sort that out to leave us bound to the most recent active scorer.
+                if (DBG) {
+                    Log.d(TAG, "Binding to " + activeScorer.packageName + " if needed.");
+                }
+                bindToScoringServiceIfNeeded(activeScorer);
+            }
+        }
+    }
+
+    /**
+     * Dispatches observed content changes to a handler for further processing.
+     */
+    @VisibleForTesting
+    public static class DispatchingContentObserver extends ContentObserver {
+        final private Map<Uri, Integer> mUriEventMap;
+        final private Context mContext;
+        final private Handler mHandler;
+
+        public DispatchingContentObserver(Context context, Handler handler) {
+            super(handler);
+            mContext = context;
+            mHandler = handler;
+            mUriEventMap = new ArrayMap<>();
+        }
+
+        void observe(Uri uri, int what) {
+            mUriEventMap.put(uri, what);
+            final ContentResolver resolver = mContext.getContentResolver();
+            resolver.registerContentObserver(uri, false /*notifyForDescendants*/, this);
+        }
+
+        @Override
+        public void onChange(boolean selfChange) {
+            onChange(selfChange, null);
+        }
+
+        @Override
+        public void onChange(boolean selfChange, Uri uri) {
+            if (DBG) Log.d(TAG, String.format("onChange(%s, %s)", selfChange, uri));
+            final Integer what = mUriEventMap.get(uri);
+            if (what != null) {
+                mHandler.obtainMessage(what).sendToTarget();
+            } else {
+                Log.w(TAG, "No matching event to send for URI = " + uri);
             }
         }
     }
 
     public NetworkScoreService(Context context) {
+      this(context, new NetworkScorerAppManager(context), Looper.myLooper());
+    }
+
+    @VisibleForTesting
+    NetworkScoreService(Context context, NetworkScorerAppManager networkScoreAppManager,
+            Looper looper) {
         mContext = context;
-        mScoreCaches = new HashMap<>();
+        mNetworkScorerAppManager = networkScoreAppManager;
+        mScoreCaches = new ArrayMap<>();
+        IntentFilter filter = new IntentFilter(Intent.ACTION_USER_UNLOCKED);
+        // TODO: Need to update when we support per-user scorers. http://b/23422763
+        mContext.registerReceiverAsUser(
+                mUserIntentReceiver, UserHandle.SYSTEM, filter, null /* broadcastPermission*/,
+                null /* scheduler */);
+        mReqRecommendationCallerRef = new AtomicReference<>(
+                new RequestRecommendationCaller(TimedRemoteCaller.DEFAULT_CALL_TIMEOUT_MILLIS));
+        mRecommendationRequestTimeoutMs = TimedRemoteCaller.DEFAULT_CALL_TIMEOUT_MILLIS;
+        mHandler = new ServiceHandler(looper);
+        mContentObserver = new DispatchingContentObserver(context, mHandler);
     }
 
     /** Called when the system is ready to run third-party code but before it actually does so. */
     void systemReady() {
-        ContentResolver cr = mContext.getContentResolver();
-        if (Settings.Global.getInt(cr, Settings.Global.NETWORK_SCORING_PROVISIONED, 0) == 0) {
-            // On first run, we try to initialize the scorer to the one configured at build time.
-            // This will be a no-op if the scorer isn't actually valid.
-            String defaultPackage = mContext.getResources().getString(
-                    R.string.config_defaultNetworkScorerPackageName);
-            if (!TextUtils.isEmpty(defaultPackage)) {
-                NetworkScorerAppManager.setActiveScorer(mContext, defaultPackage);
-            }
-            Settings.Global.putInt(cr, Settings.Global.NETWORK_SCORING_PROVISIONED, 1);
-        }
-
-        registerPackageReceiverIfNeeded();
+        if (DBG) Log.d(TAG, "systemReady");
+        registerPackageMonitorIfNeeded();
+        registerRecommendationSettingsObserver();
+        refreshRecommendationRequestTimeoutMs();
     }
 
-    private void registerPackageReceiverIfNeeded() {
-        NetworkScorerAppData scorer = NetworkScorerAppManager.getActiveScorer(mContext);
-        synchronized (mReceiverLock) {
-            // Unregister the receiver if the current scorer has changed since last registration.
-            if (mReceiver != null) {
-                if (Log.isLoggable(TAG, Log.VERBOSE)) {
-                    Log.v(TAG, "Unregistering receiver for " + mReceiver.mRegisteredPackage);
+    /** Called when the system is ready for us to start third-party code. */
+    void systemRunning() {
+        if (DBG) Log.d(TAG, "systemRunning");
+        bindToScoringServiceIfNeeded();
+    }
+
+    private void onUserUnlocked(int userId) {
+        registerPackageMonitorIfNeeded();
+        bindToScoringServiceIfNeeded();
+    }
+
+    private void registerRecommendationSettingsObserver() {
+        final List<String> providerPackages =
+            mNetworkScorerAppManager.getPotentialRecommendationProviderPackages();
+        if (!providerPackages.isEmpty()) {
+            final Uri enabledUri = Global.getUriFor(Global.NETWORK_RECOMMENDATIONS_ENABLED);
+            mContentObserver.observe(enabledUri,
+                    ServiceHandler.MSG_RECOMMENDATIONS_ENABLED_CHANGED);
+        }
+
+        final Uri timeoutUri = Global.getUriFor(Global.NETWORK_RECOMMENDATION_REQUEST_TIMEOUT_MS);
+        mContentObserver.observe(timeoutUri,
+                ServiceHandler.MSG_RECOMMENDATION_REQUEST_TIMEOUT_CHANGED);
+    }
+
+    private void registerPackageMonitorIfNeeded() {
+        if (DBG) Log.d(TAG, "registerPackageMonitorIfNeeded");
+        final List<String> providerPackages =
+            mNetworkScorerAppManager.getPotentialRecommendationProviderPackages();
+        synchronized (mPackageMonitorLock) {
+            // Unregister the current monitor if needed.
+            if (mPackageMonitor != null) {
+                if (DBG) {
+                    Log.d(TAG, "Unregistering package monitor for "
+                            + mPackageMonitor.mPackagesToWatch);
                 }
-                mContext.unregisterReceiver(mReceiver);
-                mReceiver = null;
+                mPackageMonitor.unregister();
+                mPackageMonitor = null;
             }
 
-            // Register receiver if a scorer is active.
-            if (scorer != null) {
-                IntentFilter filter = new IntentFilter();
-                filter.addAction(Intent.ACTION_PACKAGE_CHANGED);
-                filter.addAction(Intent.ACTION_PACKAGE_REPLACED);
-                filter.addAction(Intent.ACTION_PACKAGE_FULLY_REMOVED);
-                filter.addDataScheme("package");
-                filter.addDataSchemeSpecificPart(scorer.mPackageName,
-                        PatternMatcher.PATTERN_LITERAL);
-                mReceiver = new ScorerChangedReceiver(scorer.mPackageName);
-                // TODO: Need to update when we support per-user scorers.
-                mContext.registerReceiverAsUser(mReceiver, UserHandle.OWNER, filter, null, null);
-                if (Log.isLoggable(TAG, Log.VERBOSE)) {
-                    Log.v(TAG, "Registered receiver for " + scorer.mPackageName);
+            // Create and register the monitor if there are packages that could be providers.
+            if (!providerPackages.isEmpty()) {
+                mPackageMonitor = new NetworkScorerPackageMonitor(providerPackages);
+                // TODO: Need to update when we support per-user scorers. http://b/23422763
+                mPackageMonitor.register(mContext, null /* thread */, UserHandle.SYSTEM,
+                        false /* externalStorage */);
+                if (DBG) {
+                    Log.d(TAG, "Registered package monitor for "
+                            + mPackageMonitor.mPackagesToWatch);
                 }
             }
         }
+    }
+
+    private void bindToScoringServiceIfNeeded() {
+        if (DBG) Log.d(TAG, "bindToScoringServiceIfNeeded");
+        NetworkScorerAppData scorerData = mNetworkScorerAppManager.getActiveScorer();
+        bindToScoringServiceIfNeeded(scorerData);
+    }
+
+    private void bindToScoringServiceIfNeeded(NetworkScorerAppData scorerData) {
+        if (DBG) Log.d(TAG, "bindToScoringServiceIfNeeded(" + scorerData + ")");
+        if (scorerData != null && scorerData.recommendationServiceClassName != null) {
+            ComponentName componentName = new ComponentName(scorerData.packageName,
+                    scorerData.recommendationServiceClassName);
+            synchronized (mServiceConnectionLock) {
+                // If we're connected to a different component then drop it.
+                if (mServiceConnection != null
+                        && !mServiceConnection.mComponentName.equals(componentName)) {
+                    unbindFromScoringServiceIfNeeded();
+                }
+
+                // If we're not connected at all then create a new connection.
+                if (mServiceConnection == null) {
+                    mServiceConnection = new ScoringServiceConnection(componentName,
+                            scorerData.packageUid);
+                }
+
+                // Make sure the connection is connected (idempotent)
+                mServiceConnection.connect(mContext);
+            }
+        } else { // otherwise make sure it isn't bound.
+            unbindFromScoringServiceIfNeeded();
+        }
+    }
+
+    private void unbindFromScoringServiceIfNeeded() {
+        if (DBG) Log.d(TAG, "unbindFromScoringServiceIfNeeded");
+        synchronized (mServiceConnectionLock) {
+            if (mServiceConnection != null) {
+                mServiceConnection.disconnect(mContext);
+            }
+            mServiceConnection = null;
+        }
+        clearInternal();
     }
 
     @Override
     public boolean updateScores(ScoredNetwork[] networks) {
-        if (!NetworkScorerAppManager.isCallerActiveScorer(mContext, getCallingUid())) {
+        if (!isCallerActiveScorer(getCallingUid())) {
             throw new SecurityException("Caller with UID " + getCallingUid() +
                     " is not the active scorer.");
         }
 
-        // Separate networks by type.
-        Map<Integer, List<ScoredNetwork>> networksByType = new HashMap<>();
-        for (ScoredNetwork network : networks) {
-            List<ScoredNetwork> networkList = networksByType.get(network.networkKey.type);
-            if (networkList == null) {
-                networkList = new ArrayList<>();
-                networksByType.put(network.networkKey.type, networkList);
-            }
-            networkList.add(network);
-        }
-
-        // Pass the scores of each type down to the appropriate network scorer.
-        for (Map.Entry<Integer, List<ScoredNetwork>> entry : networksByType.entrySet()) {
-            INetworkScoreCache scoreCache = mScoreCaches.get(entry.getKey());
-            if (scoreCache != null) {
-                try {
-                    scoreCache.updateScores(entry.getValue());
-                } catch (RemoteException e) {
-                    if (Log.isLoggable(TAG, Log.VERBOSE)) {
-                        Log.v(TAG, "Unable to update scores of type " + entry.getKey(), e);
-                    }
+        final long token = Binder.clearCallingIdentity();
+        try {
+            // Separate networks by type.
+            Map<Integer, List<ScoredNetwork>> networksByType = new ArrayMap<>();
+            for (ScoredNetwork network : networks) {
+                List<ScoredNetwork> networkList = networksByType.get(network.networkKey.type);
+                if (networkList == null) {
+                    networkList = new ArrayList<>();
+                    networksByType.put(network.networkKey.type, networkList);
                 }
-            } else if (Log.isLoggable(TAG, Log.VERBOSE)) {
-                Log.v(TAG, "No scorer registered for type " + entry.getKey() + ", discarding");
+                networkList.add(network);
             }
-        }
 
-        return true;
+            // Pass the scores of each type down to the appropriate network scorer.
+            for (final Map.Entry<Integer, List<ScoredNetwork>> entry : networksByType.entrySet()) {
+                final RemoteCallbackList<INetworkScoreCache> callbackList;
+                final boolean isEmpty;
+                synchronized (mScoreCaches) {
+                    callbackList = mScoreCaches.get(entry.getKey());
+                    isEmpty = callbackList == null
+                            || callbackList.getRegisteredCallbackCount() == 0;
+                }
+                if (isEmpty) {
+                    if (Log.isLoggable(TAG, Log.VERBOSE)) {
+                        Log.v(TAG, "No scorer registered for type " + entry.getKey()
+                                + ", discarding");
+                    }
+                    continue;
+                }
+
+                sendCallback(new Consumer<INetworkScoreCache>() {
+                    @Override
+                    public void accept(INetworkScoreCache networkScoreCache) {
+                        try {
+                            networkScoreCache.updateScores(entry.getValue());
+                        } catch (RemoteException e) {
+                            if (Log.isLoggable(TAG, Log.VERBOSE)) {
+                                Log.v(TAG, "Unable to update scores of type " + entry.getKey(), e);
+                            }
+                        }
+                    }
+                }, Collections.singleton(callbackList));
+            }
+
+            return true;
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
+    }
+
+    private boolean isCallerSystemUid() {
+        // REQUEST_NETWORK_SCORES is a signature only permission.
+        return mContext.checkCallingOrSelfPermission(permission.REQUEST_NETWORK_SCORES) ==
+                 PackageManager.PERMISSION_GRANTED;
     }
 
     @Override
     public boolean clearScores() {
-        // Only the active scorer or the system (who can broadcast BROADCAST_NETWORK_PRIVILEGED)
-        // should be allowed to flush all scores.
-        if (NetworkScorerAppManager.isCallerActiveScorer(mContext, getCallingUid()) ||
-                mContext.checkCallingOrSelfPermission(permission.BROADCAST_NETWORK_PRIVILEGED) ==
-                        PackageManager.PERMISSION_GRANTED) {
-            clearInternal();
-            return true;
+        // Only the active scorer or the system should be allowed to flush all scores.
+        if (isCallerActiveScorer(getCallingUid()) || isCallerSystemUid()) {
+            final long token = Binder.clearCallingIdentity();
+            try {
+                clearInternal();
+                return true;
+            } finally {
+                Binder.restoreCallingIdentity(token);
+            }
         } else {
             throw new SecurityException(
                     "Caller is neither the active scorer nor the scorer manager.");
@@ -203,109 +451,490 @@ public class NetworkScoreService extends INetworkScoreService.Stub {
         // In the future, should this API be opened to 3p apps, we will need to lock this down and
         // figure out another way to streamline the UX.
 
-        // mContext.enforceCallingOrSelfPermission(permission.BROADCAST_NETWORK_PRIVILEGED, TAG);
         mContext.enforceCallingOrSelfPermission(permission.SCORE_NETWORKS, TAG);
 
-        return setScorerInternal(packageName);
+        // Scorers (recommendation providers) are selected and no longer set.
+        return false;
+    }
+
+    /**
+     * Determine whether the application with the given UID is the enabled scorer.
+     *
+     * @param callingUid the UID to check
+     * @return true if the provided UID is the active scorer, false otherwise.
+     */
+    @Override
+    public boolean isCallerActiveScorer(int callingUid) {
+        synchronized (mServiceConnectionLock) {
+            return mServiceConnection != null && mServiceConnection.mScoringAppUid == callingUid;
+        }
+    }
+
+    /**
+     * Obtain the package name of the current active network scorer.
+     *
+     * @return the full package name of the current active scorer, or null if there is no active
+     *         scorer.
+     */
+    @Override
+    public String getActiveScorerPackage() {
+        synchronized (mServiceConnectionLock) {
+            if (mServiceConnection != null) {
+                return mServiceConnection.mComponentName.getPackageName();
+            }
+        }
+        return null;
     }
 
     @Override
     public void disableScoring() {
-        // Only the active scorer or the system (who can broadcast BROADCAST_NETWORK_PRIVILEGED)
-        // should be allowed to disable scoring.
-        if (NetworkScorerAppManager.isCallerActiveScorer(mContext, getCallingUid()) ||
-                mContext.checkCallingOrSelfPermission(permission.BROADCAST_NETWORK_PRIVILEGED) ==
-                        PackageManager.PERMISSION_GRANTED) {
-            // The return value is discarded here because at this point, the call should always
-            // succeed. The only reason for failure is if the new package is not a valid scorer, but
-            // we're disabling scoring altogether here.
-            setScorerInternal(null /* packageName */);
+        // Only the active scorer or the system should be allowed to disable scoring.
+        if (isCallerActiveScorer(getCallingUid()) || isCallerSystemUid()) {
+            // no-op for now but we could write to the setting if needed.
         } else {
             throw new SecurityException(
                     "Caller is neither the active scorer nor the scorer manager.");
         }
     }
 
-    /** Set the active scorer. Callers are responsible for checking permissions as appropriate. */
-    private boolean setScorerInternal(String packageName) {
-        long token = Binder.clearCallingIdentity();
-        try {
-            // Preemptively clear scores even though the set operation could fail. We do this for
-            // safety as scores should never be compared across apps; in practice, Settings should
-            // only be allowing valid apps to be set as scorers, so failure here should be rare.
-            clearInternal();
-            boolean result = NetworkScorerAppManager.setActiveScorer(mContext, packageName);
-            if (result) {
-                registerPackageReceiverIfNeeded();
-                Intent intent = new Intent(NetworkScoreManager.ACTION_SCORER_CHANGED);
-                intent.putExtra(NetworkScoreManager.EXTRA_NEW_SCORER, packageName);
-                mContext.sendBroadcastAsUser(intent, UserHandle.ALL);
+    /** Clear scores. Callers are responsible for checking permissions as appropriate. */
+    private void clearInternal() {
+        sendCallback(new Consumer<INetworkScoreCache>() {
+            @Override
+            public void accept(INetworkScoreCache networkScoreCache) {
+                try {
+                    networkScoreCache.clearScores();
+                } catch (RemoteException e) {
+                    if (Log.isLoggable(TAG, Log.VERBOSE)) {
+                        Log.v(TAG, "Unable to clear scores", e);
+                    }
+                }
             }
-            return result;
+        }, getScoreCacheLists());
+    }
+
+    @Override
+    public void registerNetworkScoreCache(int networkType,
+                                          INetworkScoreCache scoreCache,
+                                          int filterType) {
+        mContext.enforceCallingOrSelfPermission(permission.REQUEST_NETWORK_SCORES, TAG);
+        final long token = Binder.clearCallingIdentity();
+        try {
+            synchronized (mScoreCaches) {
+                RemoteCallbackList<INetworkScoreCache> callbackList = mScoreCaches.get(networkType);
+                if (callbackList == null) {
+                    callbackList = new RemoteCallbackList<>();
+                    mScoreCaches.put(networkType, callbackList);
+                }
+                if (!callbackList.register(scoreCache, filterType)) {
+                    if (callbackList.getRegisteredCallbackCount() == 0) {
+                        mScoreCaches.remove(networkType);
+                    }
+                    if (Log.isLoggable(TAG, Log.VERBOSE)) {
+                        Log.v(TAG, "Unable to register NetworkScoreCache for type " + networkType);
+                    }
+                }
+            }
         } finally {
             Binder.restoreCallingIdentity(token);
         }
     }
 
-    /** Clear scores. Callers are responsible for checking permissions as appropriate. */
-    private void clearInternal() {
-        Set<INetworkScoreCache> cachesToClear = getScoreCaches();
-
-        for (INetworkScoreCache scoreCache : cachesToClear) {
-            try {
-                scoreCache.clearScores();
-            } catch (RemoteException e) {
-                if (Log.isLoggable(TAG, Log.VERBOSE)) {
-                    Log.v(TAG, "Unable to clear scores", e);
+    @Override
+    public void unregisterNetworkScoreCache(int networkType, INetworkScoreCache scoreCache) {
+        mContext.enforceCallingOrSelfPermission(permission.REQUEST_NETWORK_SCORES, TAG);
+        final long token = Binder.clearCallingIdentity();
+        try {
+            synchronized (mScoreCaches) {
+                RemoteCallbackList<INetworkScoreCache> callbackList = mScoreCaches.get(networkType);
+                if (callbackList == null || !callbackList.unregister(scoreCache)) {
+                    if (Log.isLoggable(TAG, Log.VERBOSE)) {
+                        Log.v(TAG, "Unable to unregister NetworkScoreCache for type "
+                                + networkType);
+                    }
+                } else if (callbackList.getRegisteredCallbackCount() == 0) {
+                    mScoreCaches.remove(networkType);
                 }
             }
+        } finally {
+            Binder.restoreCallingIdentity(token);
         }
     }
 
     @Override
-    public void registerNetworkScoreCache(int networkType, INetworkScoreCache scoreCache) {
-        mContext.enforceCallingOrSelfPermission(permission.BROADCAST_NETWORK_PRIVILEGED, TAG);
-        synchronized (mScoreCaches) {
-            if (mScoreCaches.containsKey(networkType)) {
-                throw new IllegalArgumentException(
-                        "Score cache already registered for type " + networkType);
-            }
-            mScoreCaches.put(networkType, scoreCache);
-        }
-    }
-
-    @Override
-    protected void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
-        mContext.enforceCallingOrSelfPermission(permission.DUMP, TAG);
-        NetworkScorerAppData currentScorer = NetworkScorerAppManager.getActiveScorer(mContext);
-        if (currentScorer == null) {
-            writer.println("Scoring is disabled.");
-            return;
-        }
-        writer.println("Current scorer: " + currentScorer.mPackageName);
-        writer.flush();
-
-        for (INetworkScoreCache scoreCache : getScoreCaches()) {
-            try {
-                scoreCache.asBinder().dump(fd, args);
-            } catch (RemoteException e) {
-                writer.println("Unable to dump score cache");
-                if (Log.isLoggable(TAG, Log.VERBOSE)) {
-                    Log.v(TAG, "Unable to dump score cache", e);
+    public RecommendationResult requestRecommendation(RecommendationRequest request) {
+        mContext.enforceCallingOrSelfPermission(permission.REQUEST_NETWORK_SCORES, TAG);
+        throwIfCalledOnMainThread();
+        final long token = Binder.clearCallingIdentity();
+        try {
+            final INetworkRecommendationProvider provider = getRecommendationProvider();
+            if (provider != null) {
+                try {
+                    final RequestRecommendationCaller caller = mReqRecommendationCallerRef.get();
+                    return caller.getRecommendationResult(provider, request);
+                } catch (RemoteException | TimeoutException e) {
+                    Log.w(TAG, "Failed to request a recommendation.", e);
+                    // TODO(jjoslin): 12/15/16 - Keep track of failures.
                 }
             }
+
+            if (DBG) {
+                Log.d(TAG, "Returning the default network recommendation.");
+            }
+
+            if (request != null && request.getDefaultWifiConfig() != null) {
+                return RecommendationResult.createConnectRecommendation(
+                        request.getDefaultWifiConfig());
+            }
+            return RecommendationResult.createDoNotConnectRecommendation();
+        } finally {
+            Binder.restoreCallingIdentity(token);
         }
     }
 
     /**
-     * Returns a set of all score caches that are currently active.
+     * Request a recommendation for the best network to connect to
+     * taking into account the inputs from the {@link RecommendationRequest}.
+     *
+     * @param request a {@link RecommendationRequest} instance containing the details of the request
+     * @param remoteCallback a {@link IRemoteCallback} instance to invoke when the recommendation
+     *                       is available.
+     * @throws SecurityException if the caller is not the system
+     */
+    @Override
+    public void requestRecommendationAsync(RecommendationRequest request,
+            RemoteCallback remoteCallback) {
+        mContext.enforceCallingOrSelfPermission(permission.REQUEST_NETWORK_SCORES, TAG);
+
+        final OneTimeCallback oneTimeCallback = new OneTimeCallback(remoteCallback);
+        final Pair<RecommendationRequest, OneTimeCallback> pair =
+                Pair.create(request, oneTimeCallback);
+        final Message timeoutMsg = mHandler.obtainMessage(
+                ServiceHandler.MSG_RECOMMENDATION_REQUEST_TIMEOUT, pair);
+        final INetworkRecommendationProvider provider = getRecommendationProvider();
+        final long token = Binder.clearCallingIdentity();
+        try {
+            if (provider != null) {
+                try {
+                    mHandler.sendMessageDelayed(timeoutMsg, mRecommendationRequestTimeoutMs);
+                    provider.requestRecommendation(request, new IRemoteCallback.Stub() {
+                        @Override
+                        public void sendResult(Bundle data) throws RemoteException {
+                            // Remove the timeout message
+                            mHandler.removeMessages(timeoutMsg.what, pair);
+                            oneTimeCallback.sendResult(data);
+                        }
+                    }, 0 /*sequence*/);
+                    return;
+                } catch (RemoteException e) {
+                    Log.w(TAG, "Failed to request a recommendation.", e);
+                    // TODO(jjoslin): 12/15/16 - Keep track of failures.
+                    // Remove the timeout message
+                    mHandler.removeMessages(timeoutMsg.what, pair);
+                    // Will fall through and send back the default recommendation.
+                }
+            }
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
+
+        // Else send back the default recommendation.
+        sendDefaultRecommendationResponse(request, oneTimeCallback);
+    }
+
+    @Override
+    public boolean requestScores(NetworkKey[] networks) {
+        mContext.enforceCallingOrSelfPermission(permission.REQUEST_NETWORK_SCORES, TAG);
+        final long token = Binder.clearCallingIdentity();
+        try {
+            final INetworkRecommendationProvider provider = getRecommendationProvider();
+            if (provider != null) {
+                try {
+                    provider.requestScores(networks);
+                    // TODO(jjoslin): 12/15/16 - Consider pushing null scores into the cache to
+                    // prevent repeated requests for the same scores.
+                    return true;
+                } catch (RemoteException e) {
+                    Log.w(TAG, "Failed to request scores.", e);
+                    // TODO(jjoslin): 12/15/16 - Keep track of failures.
+                }
+            }
+            return false;
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
+    }
+
+    @Override
+    protected void dump(final FileDescriptor fd, final PrintWriter writer, final String[] args) {
+        mContext.enforceCallingOrSelfPermission(permission.DUMP, TAG);
+        NetworkScorerAppData currentScorer = mNetworkScorerAppManager.getActiveScorer();
+        if (currentScorer == null) {
+            writer.println("Scoring is disabled.");
+            return;
+        }
+        writer.println("Current scorer: " + currentScorer.packageName);
+
+        sendCallback(new Consumer<INetworkScoreCache>() {
+            @Override
+            public void accept(INetworkScoreCache networkScoreCache) {
+                try {
+                  TransferPipe.dumpAsync(networkScoreCache.asBinder(), fd, args);
+                } catch (IOException | RemoteException e) {
+                  writer.println("Failed to dump score cache: " + e);
+                }
+            }
+        }, getScoreCacheLists());
+
+        synchronized (mServiceConnectionLock) {
+            if (mServiceConnection != null) {
+                mServiceConnection.dump(fd, writer, args);
+            } else {
+                writer.println("ScoringServiceConnection: null");
+            }
+        }
+        writer.flush();
+    }
+
+    /**
+     * Returns a {@link Collection} of all {@link RemoteCallbackList}s that are currently active.
      *
      * <p>May be used to perform an action on all score caches without potentially strange behavior
      * if a new scorer is registered during that action's execution.
      */
-    private Set<INetworkScoreCache> getScoreCaches() {
+    private Collection<RemoteCallbackList<INetworkScoreCache>> getScoreCacheLists() {
         synchronized (mScoreCaches) {
-            return new HashSet<>(mScoreCaches.values());
+            return new ArrayList<>(mScoreCaches.values());
+        }
+    }
+
+    private void sendCallback(Consumer<INetworkScoreCache> consumer,
+            Collection<RemoteCallbackList<INetworkScoreCache>> remoteCallbackLists) {
+        for (RemoteCallbackList<INetworkScoreCache> callbackList : remoteCallbackLists) {
+            synchronized (callbackList) { // Ensure only one active broadcast per RemoteCallbackList
+                final int count = callbackList.beginBroadcast();
+                try {
+                    for (int i = 0; i < count; i++) {
+                        consumer.accept(callbackList.getBroadcastItem(i));
+                    }
+                } finally {
+                    callbackList.finishBroadcast();
+                }
+            }
+        }
+    }
+
+    private void throwIfCalledOnMainThread() {
+        if (Thread.currentThread() == mContext.getMainLooper().getThread()) {
+            throw new RuntimeException("Cannot invoke on the main thread");
+        }
+    }
+
+    @Nullable
+    private INetworkRecommendationProvider getRecommendationProvider() {
+        synchronized (mServiceConnectionLock) {
+            if (mServiceConnection != null) {
+                return mServiceConnection.getRecommendationProvider();
+            }
+        }
+        return null;
+    }
+
+    @VisibleForTesting
+    public void refreshRecommendationRequestTimeoutMs() {
+        final ContentResolver cr = mContext.getContentResolver();
+        long timeoutMs = Settings.Global.getLong(cr,
+                Global.NETWORK_RECOMMENDATION_REQUEST_TIMEOUT_MS, -1L /*default*/);
+        if (timeoutMs < 0) {
+            timeoutMs = TimedRemoteCaller.DEFAULT_CALL_TIMEOUT_MILLIS;
+        }
+        if (DBG) Log.d(TAG, "Updating the recommendation request timeout to " + timeoutMs + " ms");
+        mRecommendationRequestTimeoutMs = timeoutMs;
+        mReqRecommendationCallerRef.set(new RequestRecommendationCaller(timeoutMs));
+    }
+
+    private static class ScoringServiceConnection implements ServiceConnection {
+        private final ComponentName mComponentName;
+        private final int mScoringAppUid;
+        private volatile boolean mBound = false;
+        private volatile boolean mConnected = false;
+        private volatile INetworkRecommendationProvider mRecommendationProvider;
+
+        ScoringServiceConnection(ComponentName componentName, int scoringAppUid) {
+            mComponentName = componentName;
+            mScoringAppUid = scoringAppUid;
+        }
+
+        void connect(Context context) {
+            if (!mBound) {
+                Intent service = new Intent(NetworkScoreManager.ACTION_RECOMMEND_NETWORKS);
+                service.setComponent(mComponentName);
+                mBound = context.bindServiceAsUser(service, this,
+                        Context.BIND_AUTO_CREATE | Context.BIND_FOREGROUND_SERVICE,
+                        UserHandle.SYSTEM);
+                if (!mBound) {
+                    Log.w(TAG, "Bind call failed for " + service);
+                } else {
+                    if (DBG) Log.d(TAG, "ScoringServiceConnection bound.");
+                }
+            }
+        }
+
+        void disconnect(Context context) {
+            try {
+                if (mBound) {
+                    mBound = false;
+                    context.unbindService(this);
+                    if (DBG) Log.d(TAG, "ScoringServiceConnection unbound.");
+                }
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Unbind failed.", e);
+            }
+
+            mRecommendationProvider = null;
+        }
+
+        INetworkRecommendationProvider getRecommendationProvider() {
+            return mRecommendationProvider;
+        }
+
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            if (DBG) Log.d(TAG, "ScoringServiceConnection: " + name.flattenToString());
+            mConnected = true;
+            mRecommendationProvider = INetworkRecommendationProvider.Stub.asInterface(service);
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            if (DBG) {
+                Log.d(TAG, "ScoringServiceConnection, disconnected: " + name.flattenToString());
+            }
+            mConnected = false;
+            mRecommendationProvider = null;
+        }
+
+        public void dump(FileDescriptor fd, PrintWriter writer, String[] args) {
+            writer.println("ScoringServiceConnection: " + mComponentName + ", bound: " + mBound
+                    + ", connected: " + mConnected);
+        }
+    }
+
+    /**
+     * Executes the async requestRecommendation() call with a timeout.
+     */
+    private static final class RequestRecommendationCaller
+            extends TimedRemoteCaller<RecommendationResult> {
+        private final IRemoteCallback mCallback;
+
+        RequestRecommendationCaller(long callTimeoutMillis) {
+            super(callTimeoutMillis);
+            mCallback = new IRemoteCallback.Stub() {
+                @Override
+                public void sendResult(Bundle data) throws RemoteException {
+                    final RecommendationResult result =
+                            data.getParcelable(EXTRA_RECOMMENDATION_RESULT);
+                    final int sequence = data.getInt(EXTRA_SEQUENCE, -1);
+                    onRemoteMethodResult(result, sequence);
+                }
+            };
+        }
+
+        /**
+         * Runs the requestRecommendation() call on the given {@link INetworkRecommendationProvider}
+         * instance.
+         *
+         * @param target the {@link INetworkRecommendationProvider} to request a recommendation
+         *               from
+         * @param request the {@link RecommendationRequest} from the calling client
+         * @return a {@link RecommendationResult} from the provider
+         * @throws RemoteException if the call failed
+         * @throws TimeoutException if the call took longer than the set timeout
+         */
+        RecommendationResult getRecommendationResult(INetworkRecommendationProvider target,
+                RecommendationRequest request) throws RemoteException, TimeoutException {
+            final int sequence = onBeforeRemoteCall();
+            target.requestRecommendation(request, mCallback, sequence);
+            return getResultTimed(sequence);
+        }
+    }
+
+    /**
+     * A wrapper around {@link RemoteCallback} that guarantees
+     * {@link RemoteCallback#sendResult(Bundle)} will be invoked at most once.
+     */
+    @VisibleForTesting
+    public static final class OneTimeCallback {
+        private final RemoteCallback mRemoteCallback;
+        private final AtomicBoolean mCallbackRun;
+
+        public OneTimeCallback(RemoteCallback remoteCallback) {
+            mRemoteCallback = remoteCallback;
+            mCallbackRun = new AtomicBoolean(false);
+        }
+
+        public void sendResult(Bundle data) {
+            if (mCallbackRun.compareAndSet(false, true)) {
+                mRemoteCallback.sendResult(data);
+            }
+        }
+    }
+
+    private static void sendDefaultRecommendationResponse(RecommendationRequest request,
+            OneTimeCallback remoteCallback) {
+        if (DBG) {
+            Log.d(TAG, "Returning the default network recommendation.");
+        }
+
+        final RecommendationResult result;
+        if (request != null && request.getDefaultWifiConfig() != null) {
+            result = RecommendationResult.createConnectRecommendation(
+                    request.getDefaultWifiConfig());
+        } else {
+            result = RecommendationResult.createDoNotConnectRecommendation();
+        }
+
+        final Bundle data = new Bundle();
+        data.putParcelable(EXTRA_RECOMMENDATION_RESULT, result);
+        remoteCallback.sendResult(data);
+    }
+
+    @VisibleForTesting
+    public final class ServiceHandler extends Handler {
+        public static final int MSG_RECOMMENDATION_REQUEST_TIMEOUT = 1;
+        public static final int MSG_RECOMMENDATIONS_ENABLED_CHANGED = 2;
+        public static final int MSG_RECOMMENDATION_REQUEST_TIMEOUT_CHANGED = 3;
+
+        public ServiceHandler(Looper looper) {
+            super(looper);
+        }
+
+        @Override
+        public void handleMessage(Message msg) {
+            final int what = msg.what;
+            switch (what) {
+                case MSG_RECOMMENDATION_REQUEST_TIMEOUT:
+                    if (DBG) {
+                        Log.d(TAG, "Network recommendation request timed out.");
+                    }
+                    final Pair<RecommendationRequest, OneTimeCallback> pair =
+                            (Pair<RecommendationRequest, OneTimeCallback>) msg.obj;
+                    final RecommendationRequest request = pair.first;
+                    final OneTimeCallback remoteCallback = pair.second;
+                    sendDefaultRecommendationResponse(request, remoteCallback);
+                    break;
+
+                case MSG_RECOMMENDATIONS_ENABLED_CHANGED:
+                    bindToScoringServiceIfNeeded();
+                    break;
+
+                case MSG_RECOMMENDATION_REQUEST_TIMEOUT_CHANGED:
+                    refreshRecommendationRequestTimeoutMs();
+                    break;
+
+                default:
+                    Log.w(TAG,"Unknown message: " + what);
+            }
         }
     }
 }

@@ -457,14 +457,16 @@ public class RadioManager {
         private final boolean mRds;
         private final boolean mTa;
         private final boolean mAf;
+        private final boolean mEa;
 
         FmBandDescriptor(int region, int type, int lowerLimit, int upperLimit, int spacing,
-                boolean stereo, boolean rds, boolean ta, boolean af) {
+                boolean stereo, boolean rds, boolean ta, boolean af, boolean ea) {
             super(region, type, lowerLimit, upperLimit, spacing);
             mStereo = stereo;
             mRds = rds;
             mTa = ta;
             mAf = af;
+            mEa = ea;
         }
 
         /** Stereo is supported
@@ -492,6 +494,13 @@ public class RadioManager {
             return mAf;
         }
 
+        /** Emergency Announcement is supported
+         * @return {@code true} if Emergency annoucement is supported, {@code false} otherwise.
+         */
+        public boolean isEaSupported() {
+            return mEa;
+        }
+
         /* Parcelable implementation */
         private FmBandDescriptor(Parcel in) {
             super(in);
@@ -499,6 +508,7 @@ public class RadioManager {
             mRds = in.readByte() == 1;
             mTa = in.readByte() == 1;
             mAf = in.readByte() == 1;
+            mEa = in.readByte() == 1;
         }
 
         public static final Parcelable.Creator<FmBandDescriptor> CREATOR
@@ -519,6 +529,7 @@ public class RadioManager {
             dest.writeByte((byte) (mRds ? 1 : 0));
             dest.writeByte((byte) (mTa ? 1 : 0));
             dest.writeByte((byte) (mAf ? 1 : 0));
+            dest.writeByte((byte) (mEa ? 1 : 0));
         }
 
         @Override
@@ -529,7 +540,8 @@ public class RadioManager {
         @Override
         public String toString() {
             return "FmBandDescriptor [ "+ super.toString() + " mStereo=" + mStereo
-                    + ", mRds=" + mRds + ", mTa=" + mTa + ", mAf=" + mAf + "]";
+                    + ", mRds=" + mRds + ", mTa=" + mTa + ", mAf=" + mAf +
+                    ", mEa =" + mEa + "]";
         }
 
         @Override
@@ -540,6 +552,7 @@ public class RadioManager {
             result = prime * result + (mRds ? 1 : 0);
             result = prime * result + (mTa ? 1 : 0);
             result = prime * result + (mAf ? 1 : 0);
+            result = prime * result + (mEa ? 1 : 0);
             return result;
         }
 
@@ -559,6 +572,8 @@ public class RadioManager {
             if (mTa != other.isTaSupported())
                 return false;
             if (mAf != other.isAfSupported())
+                return false;
+            if (mEa != other.isEaSupported())
                 return false;
             return true;
         }
@@ -740,8 +755,9 @@ public class RadioManager {
             if (!(obj instanceof BandConfig))
                 return false;
             BandConfig other = (BandConfig) obj;
-            if (mDescriptor != other.getDescriptor())
-                return false;
+            BandDescriptor otherDesc = other.getDescriptor();
+            if ((mDescriptor == null) != (otherDesc == null)) return false;
+            if (mDescriptor != null && !mDescriptor.equals(otherDesc)) return false;
             return true;
         }
     }
@@ -754,6 +770,7 @@ public class RadioManager {
         private final boolean mRds;
         private final boolean mTa;
         private final boolean mAf;
+        private final boolean mEa;
 
         FmBandConfig(FmBandDescriptor descriptor) {
             super((BandDescriptor)descriptor);
@@ -761,15 +778,17 @@ public class RadioManager {
             mRds = descriptor.isRdsSupported();
             mTa = descriptor.isTaSupported();
             mAf = descriptor.isAfSupported();
+            mEa = descriptor.isEaSupported();
         }
 
         FmBandConfig(int region, int type, int lowerLimit, int upperLimit, int spacing,
-                boolean stereo, boolean rds, boolean ta, boolean af) {
+                boolean stereo, boolean rds, boolean ta, boolean af, boolean ea) {
             super(region, type, lowerLimit, upperLimit, spacing);
             mStereo = stereo;
             mRds = rds;
             mTa = ta;
             mAf = af;
+            mEa = ea;
         }
 
         /** Get stereo enable state
@@ -800,12 +819,21 @@ public class RadioManager {
             return mAf;
         }
 
+        /**
+         * Get Emergency announcement enable state
+         * @return the enable state.
+         */
+        public boolean getEa() {
+            return mEa;
+        }
+
         private FmBandConfig(Parcel in) {
             super(in);
             mStereo = in.readByte() == 1;
             mRds = in.readByte() == 1;
             mTa = in.readByte() == 1;
             mAf = in.readByte() == 1;
+            mEa = in.readByte() == 1;
         }
 
         public static final Parcelable.Creator<FmBandConfig> CREATOR
@@ -826,6 +854,7 @@ public class RadioManager {
             dest.writeByte((byte) (mRds ? 1 : 0));
             dest.writeByte((byte) (mTa ? 1 : 0));
             dest.writeByte((byte) (mAf ? 1 : 0));
+            dest.writeByte((byte) (mEa ? 1 : 0));
         }
 
         @Override
@@ -837,7 +866,7 @@ public class RadioManager {
         public String toString() {
             return "FmBandConfig [" + super.toString()
                     + ", mStereo=" + mStereo + ", mRds=" + mRds + ", mTa=" + mTa
-                    + ", mAf=" + mAf + "]";
+                    + ", mAf=" + mAf + ", mEa =" + mEa + "]";
         }
 
         @Override
@@ -848,6 +877,7 @@ public class RadioManager {
             result = prime * result + (mRds ? 1 : 0);
             result = prime * result + (mTa ? 1 : 0);
             result = prime * result + (mAf ? 1 : 0);
+            result = prime * result + (mEa ? 1 : 0);
             return result;
         }
 
@@ -868,6 +898,8 @@ public class RadioManager {
                 return false;
             if (mAf != other.mAf)
                 return false;
+            if (mEa != other.mEa)
+                return false;
             return true;
         }
 
@@ -880,6 +912,7 @@ public class RadioManager {
             private boolean mRds;
             private boolean mTa;
             private boolean mAf;
+            private boolean mEa;
 
             /**
              * Constructs a new Builder with the defaults from an {@link FmBandDescriptor} .
@@ -893,6 +926,7 @@ public class RadioManager {
                 mRds = descriptor.isRdsSupported();
                 mTa = descriptor.isTaSupported();
                 mAf = descriptor.isAfSupported();
+                mEa = descriptor.isEaSupported();
             }
 
             /**
@@ -906,6 +940,7 @@ public class RadioManager {
                 mRds = config.getRds();
                 mTa = config.getTa();
                 mAf = config.getAf();
+                mEa = config.getEa();
             }
 
             /**
@@ -917,7 +952,7 @@ public class RadioManager {
                 FmBandConfig config = new FmBandConfig(mDescriptor.getRegion(),
                         mDescriptor.getType(), mDescriptor.getLowerLimit(),
                         mDescriptor.getUpperLimit(), mDescriptor.getSpacing(),
-                        mStereo, mRds, mTa, mAf);
+                        mStereo, mRds, mTa, mAf, mEa);
                 return config;
             }
 
@@ -954,6 +989,15 @@ public class RadioManager {
              */
             public Builder setAf(boolean state) {
                 mAf = state;
+                return this;
+            }
+
+            /** Set Emergency Announcement enable state
+             * @param state The new enable state.
+             * @return the same Builder instance.
+             */
+            public Builder setEa(boolean state) {
+                mEa = state;
                 return this;
             }
         };

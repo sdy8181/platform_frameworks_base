@@ -30,11 +30,6 @@ href="{@docRoot}sdk/api_diff/{@sdkPlatformApiLevel}/changes.html">API
 Differences Report &raquo;</a> </li>
 </ol>
 
-<h2>See Also</h2>
-<ol>
-  <li><a href="{@docRoot}sdk/exploring.html">Exploring the SDK</a></li>
-</ol>
-
 </div>
 </div>
 
@@ -54,15 +49,13 @@ compliant and includes no external libraries. </p>
 
 <p>To get started developing or testing against the Android
 {@sdkPlatformVersion} platform, use the Android SDK and AVD Manager tool to
-download the platform into your Android 1.6 or later SDK. For more information,
-see <a href="{@docRoot}sdk/exploring.html">Exploring the
-SDK</a>.</p>
+download the platform into your Android 1.6 or later SDK.</p>
 
 
 <h2 id="features">Platform Highlights</h2>
 
 <p>For a list of new user features and platform highlights, see the <a
-href="http://developer.android.com/about/versions/android-{@sdkPlatformVersion}-highlights.html">Android 
+href="http://developer.android.com/about/versions/android-{@sdkPlatformVersion}-highlights.html">Android
 {@sdkPlatformVersion} Platform Highlights</a> document.</p>
 
 <h2 id="relnotes">Revisions</h2>
@@ -80,12 +73,12 @@ function toggleDiv(link) {
     //$(".toggleme", toggleable).slideDown("fast");
     toggleable.removeClass("closed");
     toggleable.addClass("open");
-    $(".toggle-img", toggleable).attr("title", "hide").attr("src", (toRoot + "assets/images/triangle-opened.png"));
+    $(".toggle-img", toggleable).attr("title", "hide").attr("src", (toRoot + "assets/images/styles/disclosure_up.png"));
   } else {
     //$(".toggleme", toggleable).slideUp("fast");
     toggleable.removeClass("open");
     toggleable.addClass("closed");
-    $(".toggle-img", toggleable).attr("title", "show").attr("src", (toRoot + "assets/images/triangle-closed.png"));
+    $(".toggle-img", toggleable).attr("title", "show").attr("src", (toRoot + "assets/images/styles/disclosure_down.png"));
   }
   return false;
 }
@@ -108,14 +101,14 @@ function toggleDiv(link) {
 .toggleable.closed .toggleme {
   display:none;
 }
-#jd-content .toggle-img {
+#body-content .toggle-img {
   margin:0;
 }
 </style>
 
 <div class="toggleable opened">
   <a href="#" onclick="return toggleDiv(this)">
-        <img src="{@docRoot}assets/images/triangle-opened.png" class="toggle-img" height="9px" width="9px" />
+        <img src="{@docRoot}assets/images/styles/disclosure_up.png" class="toggle-img" height="9px" width="9px" />
         Android 1.5, Revision 4</a> <em>(May 2010)</em></a>
   <div class="toggleme">
 <dl>
@@ -126,10 +119,10 @@ function toggleDiv(link) {
 
 <dt>Tools:</dt>
 <dd>
-<ul> 
+<ul>
 <li>Adds support for library projects in the Ant build system.</li>
 <li>Fixes test project build in the Ant build system.</li>
-</ul> 
+</ul>
 </dd>
 
 </dl>
@@ -138,7 +131,7 @@ function toggleDiv(link) {
 
 <div class="toggleable closed">
   <a href="#" onclick="return toggleDiv(this)">
-        <img src="{@docRoot}assets/images/triangle-closed.png" class="toggle-img" height="9px" width="9px" />
+        <img src="{@docRoot}assets/images/styles/disclosure_down.png" class="toggle-img" height="9px" width="9px" />
         Android 1.5, Revision 3</a> <em>(July 2009)</em></a>
   <div class="toggleme">
 <dl>
@@ -152,7 +145,7 @@ function toggleDiv(link) {
 
 <div class="toggleable closed">
   <a href="#" onclick="return toggleDiv(this)">
-        <img src="{@docRoot}assets/images/triangle-closed.png" class="toggle-img" height="9px" width="9px" />
+        <img src="{@docRoot}assets/images/styles/disclosure_down.png" class="toggle-img" height="9px" width="9px" />
         Android 1.5, Revision 2</a> <em>(May 2009)</em></a>
   <div class="toggleme">
 <p>Not available as an SDK component &mdash; please use Android 1.5, r3 instead. </p>
@@ -161,7 +154,7 @@ function toggleDiv(link) {
 
 <div class="toggleable closed">
   <a href="#" onclick="return toggleDiv(this)">
-        <img src="{@docRoot}assets/images/triangle-closed.png" class="toggle-img" height="9px" width="9px" />
+        <img src="{@docRoot}assets/images/styles/disclosure_down.png" class="toggle-img" height="9px" width="9px" />
         Android 1.5, Revision 1</a> <em>(April 2009)</em></a>
   <div class="toggleme">
 <p>Not available as an SDK component &mdash; please use Android 1.5, r3 instead. </p>
@@ -263,8 +256,8 @@ android.speech.RecognizerIntent RecognizerIntent}.</li>
 
 <h3 id="api-diff">API differences report</h3>
 
-<p>For a detailed view of API changes in Android {@sdkPlatformVersion} (API Level {@sdkPlatformApiLevel}), as compared to 
-the previous version, see the <a href="{@docRoot}sdk/api_diff/{@sdkPlatformApiLevel}/changes.html">API 
+<p>For a detailed view of API changes in Android {@sdkPlatformVersion} (API Level {@sdkPlatformApiLevel}), as compared to
+the previous version, see the <a href="{@docRoot}sdk/api_diff/{@sdkPlatformApiLevel}/changes.html">API
 Differences Report</a>.</p>
 
 
@@ -307,8 +300,8 @@ built-in applications:</p>
 <p>The system image included in the downloadable platform provides a variety of
 built-in locales. In some cases, region-specific strings are available for the
 locales. In other cases, a default version of the language is used. The
-languages that are available in the Android {@sdkPlatformVersion} system 
-image are listed below (with <em>language</em>_<em>country/region</em> 
+languages that are available in the Android {@sdkPlatformVersion} system
+image are listed below (with <em>language</em>_<em>country/region</em>
 locale descriptor).</p>
 
 <table style="border:0;padding-bottom:0;margin-bottom:0;">
@@ -348,7 +341,7 @@ locale descriptor).</p>
 </tr>
 </table>
 
-<p>Localized UI strings match the locales that are accessible 
+<p>Localized UI strings match the locales that are accessible
 through Settings.</p>
 
 <h2 id="skins">Emulator Skins</h2>

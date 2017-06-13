@@ -17,6 +17,7 @@
 package android.telecom;
 
 import android.annotation.SystemApi;
+import android.os.Bundle;
 import android.util.ArrayMap;
 
 import java.util.Collections;
@@ -97,6 +98,13 @@ public final class Phone {
          * @param canAddCall Indicates whether an additional call can be added.
          */
         public void onCanAddCallChanged(Phone phone, boolean canAddCall) { }
+
+        /**
+         * Called to silence the ringer if a ringing call exists.
+         *
+         * @param phone The {@code Phone} calling this method.
+         */
+        public void onSilenceRinger(Phone phone) { }
     }
 
     // A Map allows us to track each Call by its Telecom-specified call ID
@@ -117,13 +125,22 @@ public final class Phone {
 
     private boolean mCanAddCall = true;
 
-    Phone(InCallAdapter adapter) {
+    private final String mCallingPackage;
+
+    /**
+     * The Target SDK version of the InCallService implementation.
+     */
+    private final int mTargetSdkVersion;
+
+    Phone(InCallAdapter adapter, String callingPackage, int targetSdkVersion) {
         mInCallAdapter = adapter;
+        mCallingPackage = callingPackage;
+        mTargetSdkVersion = targetSdkVersion;
     }
 
     final void internalAddCall(ParcelableCall parcelableCall) {
         Call call = new Call(this, parcelableCall.getId(), mInCallAdapter,
-                parcelableCall.getState());
+                parcelableCall.getState(), mCallingPackage, mTargetSdkVersion);
         mCallByTelecomCallId.put(parcelableCall.getId(), call);
         mCalls.add(call);
         checkCallTree(parcelableCall);
@@ -176,6 +193,31 @@ public final class Phone {
         if (mCanAddCall != canAddCall) {
             mCanAddCall = canAddCall;
             fireCanAddCallChanged(canAddCall);
+        }
+    }
+
+    final void internalSilenceRinger() {
+        fireSilenceRinger();
+    }
+
+    final void internalOnConnectionEvent(String telecomId, String event, Bundle extras) {
+        Call call = mCallByTelecomCallId.get(telecomId);
+        if (call != null) {
+            call.internalOnConnectionEvent(event, extras);
+        }
+    }
+
+    final void internalOnRttUpgradeRequest(String callId, int requestId) {
+        Call call = mCallByTelecomCallId.get(callId);
+        if (call != null) {
+            call.internalOnRttUpgradeRequest(requestId);
+        }
+    }
+
+    final void internalOnRttInitiationFailure(String callId, int reason) {
+        Call call = mCallByTelecomCallId.get(callId);
+        if (call != null) {
+            call.internalOnRttInitiationFailure(reason);
         }
     }
 
@@ -330,12 +372,13 @@ public final class Phone {
         }
     }
 
-    private void checkCallTree(ParcelableCall parcelableCall) {
-        if (parcelableCall.getParentCallId() != null &&
-                !mCallByTelecomCallId.containsKey(parcelableCall.getParentCallId())) {
-            Log.wtf(this, "ParcelableCall %s has nonexistent parent %s",
-                    parcelableCall.getId(), parcelableCall.getParentCallId());
+    private void fireSilenceRinger() {
+        for (Listener listener : mListeners) {
+            listener.onSilenceRinger(this);
         }
+    }
+
+    private void checkCallTree(ParcelableCall parcelableCall) {
         if (parcelableCall.getChildCallIds() != null) {
             for (int i = 0; i < parcelableCall.getChildCallIds().size(); i++) {
                 if (!mCallByTelecomCallId.containsKey(parcelableCall.getChildCallIds().get(i))) {

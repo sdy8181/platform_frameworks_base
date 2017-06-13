@@ -100,10 +100,6 @@ if (uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION)
     <td>{@code android.hardware.camera}</td>
   </tr>
   <tr>
-    <td>Bluetooth</td>
-    <td>{@code android.hardware.bluetooth}</td>
-  </tr>
-  <tr>
     <td>Near Field Communications (NFC)</td>
     <td>{@code android.hardware.nfc}</td>
   </tr>
@@ -118,6 +114,10 @@ if (uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION)
   <tr>
     <td>Sensors</td>
     <td>{@code android.hardware.sensor}</td>
+  </tr>
+  <tr>
+    <td>Screen in portrait orientation</td>
+    <td>{@code android.hardware.screen.portrait}</td>
   </tr>
 </table>
 
@@ -159,8 +159,6 @@ if (uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION)
         android:required="false"/&gt;
 &lt;uses-feature android:name="android.hardware.camera"
         android:required="false"/&gt;
-&lt;uses-feature android:name="android.hardware.bluetooth"
-        android:required="false"/&gt;
 &lt;uses-feature android:name="android.hardware.nfc"
         android:required="false"/&gt;
 &lt;uses-feature android:name="android.hardware.location.gps"
@@ -172,7 +170,7 @@ if (uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION)
 </pre>
 
 <p class="note"><strong>Note:</strong> Some features have subfeatures like {@code android.hardware.camera.front},
-  as described in the <a href="guide/topics/manifest/uses-feature-element.html#features-reference">
+  as described in the <a href="{@docRoot}guide/topics/manifest/uses-feature-element.html#features-reference">
   Feature Reference</a>. Be sure to mark as {@code required="false"} any subfeatures also used in
   your app.</p>
 
@@ -229,13 +227,19 @@ if (uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION)
   </tr>
   <tr>
     <td>{@link android.Manifest.permission#ACCESS_COARSE_LOCATION}</td>
-    <td>{@code android.hardware.location} <em>and</em> <br>
-      {@code android.hardware.location.network}</td>
+    <td>
+      <p>{@code android.hardware.location}</p>
+      <p>{@code android.hardware.location.network} (Target API level 20 or lower
+      only.)</p>
+    </td>
   </tr>
   <tr>
     <td>{@link android.Manifest.permission#ACCESS_FINE_LOCATION}</td>
-    <td>{@code android.hardware.location} <em>and</em> <br>
-      {@code android.hardware.location.gps}</td>
+    <td>
+      <p>{@code android.hardware.location}</p>
+      <p>{@code android.hardware.location.gps} (Target API level 20 or lower
+      only.)</p>
+    </td>
   </tr>
 </table>
 
@@ -248,6 +252,13 @@ if (uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION)
   required ({@code android:required="false"}).
 </p>
 
+<p class="note">
+  <strong>Note:</strong> If your app targets Android 5.0 (API level 21) or
+  higher and uses the <code>ACCESS_COARSE_LOCATION</code> or
+  <code>ACCESS_FINE_LOCATION</code> permission, users can still install your
+  app on a TV device, even if the TV device doesn't have a network card or a GPS
+  receiver.
+</p>
 
 <h3 id="check-features">Checking for hardware features</h2>
 

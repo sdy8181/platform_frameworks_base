@@ -16,8 +16,7 @@
 
 package android.test;
 
-import com.google.android.collect.Lists;
-
+import java.util.ArrayList;
 import junit.framework.Test;
 import junit.framework.TestCase;
 import junit.framework.TestSuite;
@@ -35,6 +34,7 @@ import java.util.Set;
  * @hide - This is part of a framework that is under development and should not be used for
  * active development.
  */
+@Deprecated
 public class TestCaseUtil {
 
     private TestCaseUtil() {
@@ -43,7 +43,7 @@ public class TestCaseUtil {
     @SuppressWarnings("unchecked")
     public static List<String> getTestCaseNames(Test test, boolean flatten) {
         List<Test> tests = (List<Test>) getTests(test, flatten);
-        List<String> testCaseNames = Lists.newArrayList();
+        List<String> testCaseNames = new ArrayList<>();
         for (Test aTest : tests) {
             testCaseNames.add(getTestName(aTest));
         }
@@ -56,7 +56,7 @@ public class TestCaseUtil {
 
     private static List<? extends Test> getTests(Test test, boolean flatten,
             Set<Class<?>> seen) {
-        List<Test> testCases = Lists.newArrayList();
+        List<Test> testCases = new ArrayList<>();
         if (test != null) {
 
             Test workingTest = null;
@@ -67,7 +67,7 @@ public class TestCaseUtil {
              */
             if (test instanceof TestCase &&
                     ((TestCase)test).getName() == null) {
-                workingTest = invokeSuiteMethodIfPossible(test.getClass(), 
+                workingTest = invokeSuiteMethodIfPossible(test.getClass(),
                         seen);
             }
             if (workingTest == null) {
@@ -155,7 +155,7 @@ public class TestCaseUtil {
     public static TestSuite createTestSuite(Class<? extends Test> testClass)
             throws InstantiationException, IllegalAccessException {
 
-        Test test = invokeSuiteMethodIfPossible(testClass, 
+        Test test = invokeSuiteMethodIfPossible(testClass,
                 new HashSet<Class<?>>());
         if (test == null) {
             return new TestSuite(testClass);

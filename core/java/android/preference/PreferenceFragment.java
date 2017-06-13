@@ -23,15 +23,18 @@ import android.app.Fragment;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.TypedArray;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
+import android.text.TextUtils;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.View.OnKeyListener;
+import android.view.ViewGroup;
 import android.widget.ListView;
+import android.widget.TextView;
 
 /**
  * Shows a hierarchy of {@link Preference} objects as
@@ -176,6 +179,25 @@ public abstract class PreferenceFragment extends Fragment implements
         a.recycle();
 
         return inflater.inflate(mLayoutResId, container, false);
+    }
+
+    @Override
+    public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+
+        TypedArray a = getActivity().obtainStyledAttributes(null,
+                com.android.internal.R.styleable.PreferenceFragment,
+                com.android.internal.R.attr.preferenceFragmentStyle,
+                0);
+
+        ListView lv = (ListView) view.findViewById(android.R.id.list);
+        if (lv != null
+                && a.hasValueOrEmpty(com.android.internal.R.styleable.PreferenceFragment_divider)) {
+            lv.setDivider(
+                    a.getDrawable(com.android.internal.R.styleable.PreferenceFragment_divider));
+        }
+
+        a.recycle();
     }
 
     @Override
@@ -346,6 +368,20 @@ public abstract class PreferenceFragment extends Fragment implements
     private void bindPreferences() {
         final PreferenceScreen preferenceScreen = getPreferenceScreen();
         if (preferenceScreen != null) {
+            View root = getView();
+            if (root != null) {
+                View titleView = root.findViewById(android.R.id.title);
+                if (titleView instanceof TextView) {
+                    CharSequence title = preferenceScreen.getTitle();
+                    if (TextUtils.isEmpty(title)) {
+                        titleView.setVisibility(View.GONE);
+                    } else {
+                        ((TextView) titleView).setText(title);
+                        titleView.setVisibility(View.VISIBLE);
+                    }
+                }
+            }
+
             preferenceScreen.bind(getListView());
         }
         onBindPreferences();

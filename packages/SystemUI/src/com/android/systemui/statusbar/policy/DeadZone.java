@@ -24,16 +24,24 @@ import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.util.Slog;
 import android.view.MotionEvent;
+import android.view.Surface;
 import android.view.View;
 
 import com.android.systemui.R;
 
+/**
+ * The "dead zone" consumes unintentional taps along the top edge of the navigation bar.
+ * When users are typing quickly on an IME they may attempt to hit the space bar, overshoot, and
+ * accidentally hit the home button. The DeadZone expands temporarily after each tap in the UI
+ * outside the navigation bar (since this is when accidental taps are more likely), then contracts
+ * back over time (since a later tap might be intended for the top of the bar).
+ */
 public class DeadZone extends View {
     public static final String TAG = "DeadZone";
 
     public static final boolean DEBUG = false;
-    public static final int HORIZONTAL = 0;
-    public static final int VERTICAL = 1;
+    public static final int HORIZONTAL = 0;  // Consume taps along the top edge.
+    public static final int VERTICAL = 1;  // Consume taps along the left edge.
 
     private static final boolean CHATTY = true; // print to logcat when we eat a click
 
@@ -47,6 +55,7 @@ public class DeadZone extends View {
     private int mHold, mDecay;
     private boolean mVertical;
     private long mLastPokeTime;
+    private int mDisplayRotation;
 
     private final Runnable mDebugFlash = new Runnable() {
         @Override
@@ -109,6 +118,12 @@ public class DeadZone extends View {
             Slog.v(TAG, this + " onTouch: " + MotionEvent.actionToString(event.getAction()));
         }
 
+        // Don't consume events for high precision pointing devices. For this purpose a stylus is
+        // considered low precision (like a finger), so its events may be consumed.
+        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
+            return false;
+        }
+
         final int action = event.getAction();
         if (action == MotionEvent.ACTION_OUTSIDE) {
             poke(event);
@@ -117,7 +132,19 @@ public class DeadZone extends View {
                 Slog.v(TAG, this + " ACTION_DOWN: " + event.getX() + "," + event.getY());
             }
             int size = (int) getSize(event.getEventTime());
-            if ((mVertical && event.getX() < size) || event.getY() < size) {
+            // In the vertical orientation consume taps along the left edge.
+            // In horizontal orientation consume taps along the top edge.
+            final boolean consumeEvent;
+            if (mVertical) {
+                if (mDisplayRotation == Surface.ROTATION_270) {
+                    consumeEvent = event.getX() > getWidth() - size;
+                } else {
+                    consumeEvent = event.getX() < size;
+                }
+            } else {
+                consumeEvent = event.getY() < size;
+            }
+            if (consumeEvent) {
                 if (CHATTY) {
                     Slog.v(TAG, "consuming errant click: (" + event.getX() + "," + event.getY() + ")");
                 }
@@ -154,12 +181,25 @@ public class DeadZone extends View {
         }
 
         final int size = (int) getSize(SystemClock.uptimeMillis());
-        can.clipRect(0, 0, mVertical ? size : can.getWidth(), mVertical ? can.getHeight() : size);
+        if (mVertical) {
+            if (mDisplayRotation == Surface.ROTATION_270) {
+                can.clipRect(can.getWidth() - size, 0, can.getWidth(), can.getHeight());
+            } else {
+                can.clipRect(0, 0, size, can.getHeight());
+            }
+        } else {
+            can.clipRect(0, 0, can.getWidth(), size);
+        }
+
         final float frac = DEBUG ? (mFlashFrac - 0.5f) + 0.5f : mFlashFrac;
         can.drawARGB((int) (frac * 0xFF), 0xDD, 0xEE, 0xAA);
 
         if (DEBUG && size > mSizeMin)
             // crazy aggressive redrawing here, for debugging only
             postInvalidateDelayed(100);
+    }
+
+    public void setDisplayRotation(int rotation) {
+        mDisplayRotation = rotation;
     }
 }

@@ -18,6 +18,7 @@ package android.widget;
 
 import android.annotation.NonNull;
 import android.content.Context;
+import android.content.res.Configuration;
 import android.content.res.TypedArray;
 import android.graphics.Canvas;
 import android.graphics.Rect;
@@ -128,6 +129,8 @@ public class HorizontalScrollView extends FrameLayout {
     private int mOverscrollDistance;
     private int mOverflingDistance;
 
+    private float mScrollFactor;
+
     /**
      * ID of the active pointer. This is used to retain consistency during
      * drags/flings if multiple pointers are used.
@@ -165,6 +168,10 @@ public class HorizontalScrollView extends FrameLayout {
         setFillViewport(a.getBoolean(android.R.styleable.HorizontalScrollView_fillViewport, false));
 
         a.recycle();
+
+        if (context.getResources().getConfiguration().uiMode == Configuration.UI_MODE_TYPE_WATCH) {
+            setRevealOnFocusHint(false);
+        }
     }
 
     @Override
@@ -217,6 +224,7 @@ public class HorizontalScrollView extends FrameLayout {
         mMaximumVelocity = configuration.getScaledMaximumFlingVelocity();
         mOverscrollDistance = configuration.getScaledOverscrollDistance();
         mOverflingDistance = configuration.getScaledOverflingDistance();
+        mScrollFactor = configuration.getScaledScrollFactor();
     }
 
     @Override
@@ -325,16 +333,24 @@ public class HorizontalScrollView extends FrameLayout {
 
         if (getChildCount() > 0) {
             final View child = getChildAt(0);
-            int width = getMeasuredWidth();
-            if (child.getMeasuredWidth() < width) {
-                final FrameLayout.LayoutParams lp = (LayoutParams) child.getLayoutParams();
+            final int widthPadding;
+            final int heightPadding;
+            final FrameLayout.LayoutParams lp = (LayoutParams) child.getLayoutParams();
+            final int targetSdkVersion = getContext().getApplicationInfo().targetSdkVersion;
+            if (targetSdkVersion >= Build.VERSION_CODES.M) {
+                widthPadding = mPaddingLeft + mPaddingRight + lp.leftMargin + lp.rightMargin;
+                heightPadding = mPaddingTop + mPaddingBottom + lp.topMargin + lp.bottomMargin;
+            } else {
+                widthPadding = mPaddingLeft + mPaddingRight;
+                heightPadding = mPaddingTop + mPaddingBottom;
+            }
 
-                int childHeightMeasureSpec = getChildMeasureSpec(heightMeasureSpec, mPaddingTop
-                        + mPaddingBottom, lp.height);
-                width -= mPaddingLeft;
-                width -= mPaddingRight;
-                int childWidthMeasureSpec = MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY);
-
+            int desiredWidth = getMeasuredWidth() - widthPadding;
+            if (child.getMeasuredWidth() < desiredWidth) {
+                final int childWidthMeasureSpec = MeasureSpec.makeMeasureSpec(
+                        desiredWidth, MeasureSpec.EXACTLY);
+                final int childHeightMeasureSpec = getChildMeasureSpec(
+                        heightMeasureSpec, heightPadding, lp.height);
                 child.measure(childWidthMeasureSpec, childHeightMeasureSpec);
             }
         }
@@ -451,6 +467,10 @@ public class HorizontalScrollView extends FrameLayout {
         */
         final int action = ev.getAction();
         if ((action == MotionEvent.ACTION_MOVE) && (mIsBeingDragged)) {
+            return true;
+        }
+
+        if (super.onInterceptTouchEvent(ev)) {
             return true;
         }
 
@@ -707,30 +727,35 @@ public class HorizontalScrollView extends FrameLayout {
 
     @Override
     public boolean onGenericMotionEvent(MotionEvent event) {
-        if ((event.getSource() & InputDevice.SOURCE_CLASS_POINTER) != 0) {
-            switch (event.getAction()) {
-                case MotionEvent.ACTION_SCROLL: {
-                    if (!mIsBeingDragged) {
-                        final float hscroll;
+        switch (event.getAction()) {
+            case MotionEvent.ACTION_SCROLL: {
+                if (!mIsBeingDragged) {
+                    final float axisValue;
+                    if (event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)) {
                         if ((event.getMetaState() & KeyEvent.META_SHIFT_ON) != 0) {
-                            hscroll = -event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+                            axisValue = -event.getAxisValue(MotionEvent.AXIS_VSCROLL);
                         } else {
-                            hscroll = event.getAxisValue(MotionEvent.AXIS_HSCROLL);
+                            axisValue = event.getAxisValue(MotionEvent.AXIS_HSCROLL);
                         }
-                        if (hscroll != 0) {
-                            final int delta = (int) (hscroll * getHorizontalScrollFactor());
-                            final int range = getScrollRange();
-                            int oldScrollX = mScrollX;
-                            int newScrollX = oldScrollX + delta;
-                            if (newScrollX < 0) {
-                                newScrollX = 0;
-                            } else if (newScrollX > range) {
-                                newScrollX = range;
-                            }
-                            if (newScrollX != oldScrollX) {
-                                super.scrollTo(newScrollX, mScrollY);
-                                return true;
-                            }
+                    } else if (event.isFromSource(InputDevice.SOURCE_ROTARY_ENCODER)) {
+                        axisValue = event.getAxisValue(MotionEvent.AXIS_SCROLL);
+                    } else {
+                        axisValue = 0;
+                    }
+
+                    final int delta = Math.round(axisValue * mScrollFactor);
+                    if (delta != 0) {
+                        final int range = getScrollRange();
+                        int oldScrollX = mScrollX;
+                        int newScrollX = oldScrollX + delta;
+                        if (newScrollX < 0) {
+                            newScrollX = 0;
+                        } else if (newScrollX > range) {
+                            newScrollX = range;
+                        }
+                        if (newScrollX != oldScrollX) {
+                            super.scrollTo(newScrollX, mScrollY);
+                            return true;
                         }
                     }
                 }
@@ -1231,17 +1256,17 @@ public class HorizontalScrollView extends FrameLayout {
     }
 
     @Override
-    protected void measureChild(View child, int parentWidthMeasureSpec, int parentHeightMeasureSpec) {
+    protected void measureChild(View child, int parentWidthMeasureSpec,
+            int parentHeightMeasureSpec) {
         ViewGroup.LayoutParams lp = child.getLayoutParams();
 
-        int childWidthMeasureSpec;
-        int childHeightMeasureSpec;
+        final int horizontalPadding = mPaddingLeft + mPaddingRight;
+        final int childWidthMeasureSpec = MeasureSpec.makeSafeMeasureSpec(
+                Math.max(0, MeasureSpec.getSize(parentWidthMeasureSpec) - horizontalPadding),
+                MeasureSpec.UNSPECIFIED);
 
-        childHeightMeasureSpec = getChildMeasureSpec(parentHeightMeasureSpec, mPaddingTop
-                + mPaddingBottom, lp.height);
-
-        childWidthMeasureSpec = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED);
-
+        final int childHeightMeasureSpec = getChildMeasureSpec(parentHeightMeasureSpec,
+                mPaddingTop + mPaddingBottom, lp.height);
         child.measure(childWidthMeasureSpec, childHeightMeasureSpec);
     }
 
@@ -1253,8 +1278,11 @@ public class HorizontalScrollView extends FrameLayout {
         final int childHeightMeasureSpec = getChildMeasureSpec(parentHeightMeasureSpec,
                 mPaddingTop + mPaddingBottom + lp.topMargin + lp.bottomMargin
                         + heightUsed, lp.height);
-        final int childWidthMeasureSpec = MeasureSpec.makeMeasureSpec(
-                lp.leftMargin + lp.rightMargin, MeasureSpec.UNSPECIFIED);
+        final int usedTotal = mPaddingLeft + mPaddingRight + lp.leftMargin + lp.rightMargin +
+                widthUsed;
+        final int childWidthMeasureSpec = MeasureSpec.makeSafeMeasureSpec(
+                Math.max(0, MeasureSpec.getSize(parentWidthMeasureSpec) - usedTotal),
+                MeasureSpec.UNSPECIFIED);
 
         child.measure(childWidthMeasureSpec, childHeightMeasureSpec);
     }
@@ -1415,11 +1443,13 @@ public class HorizontalScrollView extends FrameLayout {
 
     @Override
     public void requestChildFocus(View child, View focused) {
-        if (!mIsLayoutDirty) {
-            scrollToChild(focused);
-        } else {
-            // The child may not be laid out yet, we can't compute the scroll yet
-            mChildToScrollTo = focused;
+        if (focused.getRevealOnFocusHint()) {
+            if (!mIsLayoutDirty) {
+                scrollToChild(focused);
+            } else {
+                // The child may not be laid out yet, we can't compute the scroll yet
+                mChildToScrollTo = focused;
+            }
         }
         super.requestChildFocus(child, focused);
     }

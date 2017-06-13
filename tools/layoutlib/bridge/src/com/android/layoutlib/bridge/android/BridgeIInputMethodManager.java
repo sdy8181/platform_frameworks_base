@@ -16,11 +16,13 @@
 
 package com.android.layoutlib.bridge.android;
 
+import com.android.internal.inputmethod.IInputContentUriToken;
 import com.android.internal.view.IInputContext;
 import com.android.internal.view.IInputMethodClient;
 import com.android.internal.view.IInputMethodManager;
 import com.android.internal.view.InputBindResult;
 
+import android.net.Uri;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.ResultReceiver;
@@ -184,13 +186,6 @@ public class BridgeIInputMethodManager implements IInputMethodManager {
     }
 
     @Override
-    public InputBindResult startInput(IInputMethodClient client, IInputContext inputContext,
-            EditorInfo attribute, int controlFlags) throws RemoteException {
-        // TODO Auto-generated method stub
-        return null;
-    }
-
-    @Override
     public boolean switchToLastInputMethod(IBinder arg0) throws RemoteException {
         // TODO Auto-generated method stub
         return false;
@@ -226,15 +221,30 @@ public class BridgeIInputMethodManager implements IInputMethodManager {
     }
 
     @Override
-    public InputBindResult windowGainedFocus(IInputMethodClient client, IBinder windowToken,
-            int controlFlags, int softInputMode, int windowFlags, EditorInfo attribute,
-            IInputContext inputContext) throws RemoteException {
+    public void clearLastInputMethodWindowForTransition(IBinder arg0) throws RemoteException {
+        // TODO Auto-generated method stub
+    }
+
+    @Override
+    public InputBindResult startInputOrWindowGainedFocus(
+            /* @InputMethodClient.StartInputReason */ int startInputReason,
+            IInputMethodClient client, IBinder windowToken, int controlFlags, int softInputMode,
+            int windowFlags, EditorInfo attribute, IInputContext inputContext,
+            /* @InputConnectionInspector.MissingMethodFlags */ int missingMethodFlags)
+            throws RemoteException {
         // TODO Auto-generated method stub
         return null;
     }
 
     @Override
     public IBinder asBinder() {
+        // TODO Auto-generated method stub
+        return null;
+    }
+
+    @Override
+    public IInputContentUriToken createInputContentUriToken(IBinder token, Uri contentUri,
+            String packageName) {
         // TODO Auto-generated method stub
         return null;
     }

@@ -157,7 +157,6 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
     private final PackageManagerService mPm;
 
     private AppOpsManager mAppOps;
-    private StorageManager mStorage;
 
     private final HandlerThread mInstallThread;
     private final Handler mInstallHandler;
@@ -182,6 +181,10 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
      * normal random might be predictable.
      */
     private final Random mRandom = new SecureRandom();
+
+    /** All sessions allocated */
+    @GuardedBy("mSessions")
+    private final SparseBooleanArray mAllocatedSessions = new SparseBooleanArray();
 
     @GuardedBy("mSessions")
     private final SparseArray<PackageInstallerSession> mSessions = new SparseArray<>();
@@ -213,14 +216,15 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
         mCallbacks = new Callbacks(mInstallThread.getLooper());
 
         mSessionsFile = new AtomicFile(
-                new File(Environment.getSystemSecureDirectory(), "install_sessions.xml"));
-        mSessionsDir = new File(Environment.getSystemSecureDirectory(), "install_sessions");
+                new File(Environment.getDataSystemDirectory(), "install_sessions.xml"));
+        mSessionsDir = new File(Environment.getDataSystemDirectory(), "install_sessions");
         mSessionsDir.mkdirs();
 
         synchronized (mSessions) {
             readSessionsLocked();
 
-            reconcileStagesLocked(StorageManager.UUID_PRIVATE_INTERNAL);
+            reconcileStagesLocked(StorageManager.UUID_PRIVATE_INTERNAL, false /*isEphemeral*/);
+            reconcileStagesLocked(StorageManager.UUID_PRIVATE_INTERNAL, true /*isEphemeral*/);
 
             final ArraySet<File> unclaimedIcons = newArraySet(
                     mSessionsDir.listFiles());
@@ -241,11 +245,10 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
 
     public void systemReady() {
         mAppOps = mContext.getSystemService(AppOpsManager.class);
-        mStorage = mContext.getSystemService(StorageManager.class);
     }
 
-    private void reconcileStagesLocked(String volumeUuid) {
-        final File stagingDir = buildStagingDir(volumeUuid);
+    private void reconcileStagesLocked(String volumeUuid, boolean isEphemeral) {
+        final File stagingDir = buildStagingDir(volumeUuid, isEphemeral);
         final ArraySet<File> unclaimedStages = newArraySet(
                 stagingDir.listFiles(sStageFilter));
 
@@ -259,18 +262,14 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
         for (File stage : unclaimedStages) {
             Slog.w(TAG, "Deleting orphan stage " + stage);
             synchronized (mPm.mInstallLock) {
-                if (stage.isDirectory()) {
-                    mPm.mInstaller.rmPackageDir(stage.getAbsolutePath());
-                } else {
-                    stage.delete();
-                }
+                mPm.removeCodePathLI(stage);
             }
         }
     }
 
     public void onPrivateVolumeMounted(String volumeUuid) {
         synchronized (mSessions) {
-            reconcileStagesLocked(volumeUuid);
+            reconcileStagesLocked(volumeUuid, false /*isEphemeral*/);
         }
     }
 
@@ -311,12 +310,12 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
     }
 
     @Deprecated
-    public File allocateStageDirLegacy(String volumeUuid) throws IOException {
+    public File allocateStageDirLegacy(String volumeUuid, boolean isEphemeral) throws IOException {
         synchronized (mSessions) {
             try {
                 final int sessionId = allocateSessionIdLocked();
                 mLegacySessions.put(sessionId, true);
-                final File stageDir = buildStageDir(volumeUuid, sessionId);
+                final File stageDir = buildStageDir(volumeUuid, sessionId, isEphemeral);
                 prepareStageDir(stageDir);
                 return stageDir;
             } catch (IllegalStateException e) {
@@ -370,6 +369,7 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
                             // keep details around for dumpsys.
                             mHistoricalSessions.put(session.sessionId, session);
                         }
+                        mAllocatedSessions.put(session.sessionId, true);
                     }
                 }
             }
@@ -387,8 +387,8 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
         final int sessionId = readIntAttribute(in, ATTR_SESSION_ID);
         final int userId = readIntAttribute(in, ATTR_USER_ID);
         final String installerPackageName = readStringAttribute(in, ATTR_INSTALLER_PACKAGE_NAME);
-        final int installerUid = readIntAttribute(in, ATTR_INSTALLER_UID,
-                mPm.getPackageUid(installerPackageName, userId));
+        final int installerUid = readIntAttribute(in, ATTR_INSTALLER_UID, mPm.getPackageUid(
+                installerPackageName, PackageManager.MATCH_UNINSTALLED_PACKAGES, userId));
         final long createdMillis = readLongAttribute(in, ATTR_CREATED_MILLIS);
         final String stageDirRaw = readStringAttribute(in, ATTR_SESSION_STAGE_DIR);
         final File stageDir = (stageDirRaw != null) ? new File(stageDirRaw) : null;
@@ -671,21 +671,26 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
                         "Too many historical sessions for UID " + callingUid);
             }
 
-            final long createdMillis = System.currentTimeMillis();
             sessionId = allocateSessionIdLocked();
+        }
 
-            // We're staging to exactly one location
-            File stageDir = null;
-            String stageCid = null;
-            if ((params.installFlags & PackageManager.INSTALL_INTERNAL) != 0) {
-                stageDir = buildStageDir(params.volumeUuid, sessionId);
-            } else {
-                stageCid = buildExternalStageCid(sessionId);
-            }
+        final long createdMillis = System.currentTimeMillis();
+        // We're staging to exactly one location
+        File stageDir = null;
+        String stageCid = null;
+        if ((params.installFlags & PackageManager.INSTALL_INTERNAL) != 0) {
+            final boolean isEphemeral =
+                    (params.installFlags & PackageManager.INSTALL_EPHEMERAL) != 0;
+            stageDir = buildStageDir(params.volumeUuid, sessionId, isEphemeral);
+        } else {
+            stageCid = buildExternalStageCid(sessionId);
+        }
 
-            session = new PackageInstallerSession(mInternalCallback, mContext, mPm,
-                    mInstallThread.getLooper(), sessionId, userId, installerPackageName, callingUid,
-                    params, createdMillis, stageDir, stageCid, false, false);
+        session = new PackageInstallerSession(mInternalCallback, mContext, mPm,
+                mInstallThread.getLooper(), sessionId, userId, installerPackageName, callingUid,
+                params, createdMillis, stageDir, stageCid, false, false);
+
+        synchronized (mSessions) {
             mSessions.put(sessionId, session);
         }
 
@@ -768,8 +773,8 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
         int sessionId;
         do {
             sessionId = mRandom.nextInt(Integer.MAX_VALUE - 1) + 1;
-            if (mSessions.get(sessionId) == null && mHistoricalSessions.get(sessionId) == null
-                    && !mLegacySessions.get(sessionId, false)) {
+            if (!mAllocatedSessions.get(sessionId, false)) {
+                mAllocatedSessions.put(sessionId, true);
                 return sessionId;
             }
         } while (n++ < 32);
@@ -777,12 +782,15 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
         throw new IllegalStateException("Failed to allocate session ID");
     }
 
-    private File buildStagingDir(String volumeUuid) {
+    private File buildStagingDir(String volumeUuid, boolean isEphemeral) {
+        if (isEphemeral) {
+            return Environment.getDataAppEphemeralDirectory(volumeUuid);
+        }
         return Environment.getDataAppDirectory(volumeUuid);
     }
 
-    private File buildStageDir(String volumeUuid, int sessionId) {
-        final File stagingDir = buildStagingDir(volumeUuid);
+    private File buildStageDir(String volumeUuid, int sessionId, boolean isEphemeral) {
+        final File stagingDir = buildStagingDir(volumeUuid, isEphemeral);
         return new File(stagingDir, "vmdl" + sessionId + ".tmp");
     }
 
@@ -866,15 +874,16 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
             mAppOps.checkPackage(callingUid, callerPackageName);
         }
 
-        // Check whether the caller is device owner
+        // Check whether the caller is device owner, in which case we do it silently.
         DevicePolicyManager dpm = (DevicePolicyManager) mContext.getSystemService(
                 Context.DEVICE_POLICY_SERVICE);
-        boolean isDeviceOwner = (dpm != null) && dpm.isDeviceOwnerApp(callerPackageName);
+        boolean isDeviceOwner = (dpm != null) && dpm.isDeviceOwnerAppOnCallingUser(
+                callerPackageName);
 
         final PackageDeleteObserverAdapter adapter = new PackageDeleteObserverAdapter(mContext,
                 statusReceiver, packageName, isDeviceOwner, userId);
         if (mContext.checkCallingOrSelfPermission(android.Manifest.permission.DELETE_PACKAGES)
-                == PackageManager.PERMISSION_GRANTED) {
+                    == PackageManager.PERMISSION_GRANTED) {
             // Sweet, call straight through!
             mPm.deletePackage(packageName, adapter.getBinder(), userId, flags);
         } else if (isDeviceOwner) {
@@ -900,7 +909,10 @@ public class PackageInstallerService extends IPackageInstaller.Stub {
         mContext.enforceCallingOrSelfPermission(android.Manifest.permission.INSTALL_PACKAGES, TAG);
 
         synchronized (mSessions) {
-            mSessions.get(sessionId).setPermissionsResult(accepted);
+            PackageInstallerSession session = mSessions.get(sessionId);
+            if (session != null) {
+                session.setPermissionsResult(accepted);
+            }
         }
     }
 

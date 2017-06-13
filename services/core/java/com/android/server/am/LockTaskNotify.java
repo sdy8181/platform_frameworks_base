@@ -20,8 +20,9 @@ import android.app.ActivityManager;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Message;
+import android.os.SystemClock;
+import android.util.Slog;
 import android.view.WindowManager;
-import android.view.accessibility.AccessibilityManager;
 import android.widget.Toast;
 
 import com.android.internal.R;
@@ -32,16 +33,15 @@ import com.android.internal.R;
  */
 public class LockTaskNotify {
     private static final String TAG = "LockTaskNotify";
+    private static final long SHOW_TOAST_MINIMUM_INTERVAL = 1000;
 
     private final Context mContext;
     private final H mHandler;
-    private AccessibilityManager mAccessibilityManager;
     private Toast mLastToast;
+    private long mLastShowToastTime;
 
     public LockTaskNotify(Context context) {
         mContext = context;
-        mAccessibilityManager = (AccessibilityManager)
-                mContext.getSystemService(Context.ACCESSIBILITY_SERVICE);
         mHandler = new H();
     }
 
@@ -54,16 +54,21 @@ public class LockTaskNotify {
         if (lockTaskModeState == ActivityManager.LOCK_TASK_MODE_LOCKED) {
             text = mContext.getString(R.string.lock_to_app_toast_locked);
         } else if (lockTaskModeState == ActivityManager.LOCK_TASK_MODE_PINNED) {
-            text = mContext.getString(mAccessibilityManager.isEnabled()
-                    ? R.string.lock_to_app_toast_accessible : R.string.lock_to_app_toast);
+            text = mContext.getString(R.string.lock_to_app_toast);
         }
         if (text == null) {
+            return;
+        }
+        long showToastTime = SystemClock.elapsedRealtime();
+        if ((showToastTime - mLastShowToastTime) < SHOW_TOAST_MINIMUM_INTERVAL) {
+            Slog.i(TAG, "Ignore toast since it is requested in very short interval.");
             return;
         }
         if (mLastToast != null) {
             mLastToast.cancel();
         }
         mLastToast = makeAllUserToastAndShow(text);
+        mLastShowToastTime = showToastTime;
     }
 
     public void show(boolean starting) {

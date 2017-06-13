@@ -49,6 +49,7 @@ public abstract class WindowOrientationListener {
             "debug.orientation.log", false);
 
     private static final boolean USE_GRAVITY_SENSOR = false;
+    private static final int DEFAULT_BATCH_LATENCY = 100000;
 
     private Handler mHandler;
     private SensorManager mSensorManager;
@@ -87,22 +88,10 @@ public abstract class WindowOrientationListener {
         mHandler = handler;
         mSensorManager = (SensorManager)context.getSystemService(Context.SENSOR_SERVICE);
         mRate = rate;
+        mSensor = mSensorManager.getDefaultSensor(Sensor.TYPE_DEVICE_ORIENTATION);
 
-        mSensorType = context.getResources().getString(
-                com.android.internal.R.string.config_orientationSensorType);
-        if (!TextUtils.isEmpty(mSensorType)) {
-            List<Sensor> sensors = mSensorManager.getSensorList(Sensor.TYPE_ALL);
-            final int N = sensors.size();
-            for (int i = 0; i < N; i++) {
-                Sensor sensor = sensors.get(i);
-                if (mSensorType.equals(sensor.getStringType())) {
-                    mSensor = sensor;
-                    break;
-                }
-            }
-            if (mSensor != null) {
-                mOrientationJudge = new OrientationSensorJudge();
-            }
+        if (mSensor != null) {
+            mOrientationJudge = new OrientationSensorJudge();
         }
 
         if (mOrientationJudge == null) {
@@ -130,7 +119,12 @@ public abstract class WindowOrientationListener {
                     Slog.d(TAG, "WindowOrientationListener enabled");
                 }
                 mOrientationJudge.resetLocked();
-                mSensorManager.registerListener(mOrientationJudge, mSensor, mRate, mHandler);
+                if (mSensor.getType() == Sensor.TYPE_ACCELEROMETER) {
+                    mSensorManager.registerListener(
+                            mOrientationJudge, mSensor, mRate, DEFAULT_BATCH_LATENCY, mHandler);
+                } else {
+                    mSensorManager.registerListener(mOrientationJudge, mSensor, mRate, mHandler);
+                }
                 mEnabled = true;
             }
         }

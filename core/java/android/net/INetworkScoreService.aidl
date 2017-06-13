@@ -17,7 +17,11 @@
 package android.net;
 
 import android.net.INetworkScoreCache;
+import android.net.NetworkKey;
+import android.net.RecommendationRequest;
+import android.net.RecommendationResult;
 import android.net.ScoredNetwork;
+import android.os.RemoteCallback;
 
 /**
  * A service for updating network scores from a network scorer application.
@@ -54,14 +58,76 @@ interface INetworkScoreService
     void disableScoring();
 
     /**
-     * Register a network subsystem for scoring.
+     * Register a cache to receive scoring updates.
+     *
+     * @param networkType the type of network this cache can handle. See {@link NetworkKey#type}
+     * @param scoreCache implementation of {@link INetworkScoreCache} to store the scores
+     * @param filterType the {@link CacheUpdateFilter} to apply
+     * @throws SecurityException if the caller is not the system
+     * @throws IllegalArgumentException if a score cache is already registed for this type
+     * @hide
+     */
+    void registerNetworkScoreCache(int networkType, INetworkScoreCache scoreCache, int filterType);
+
+    /**
+     * Unregister a cache to receive scoring updates.
      *
      * @param networkType the type of network this cache can handle. See {@link NetworkKey#type}.
      * @param scoreCache implementation of {@link INetworkScoreCache} to store the scores.
      * @throws SecurityException if the caller is not the system.
-     * @throws IllegalArgumentException if a score cache is already registed for this type.
      * @hide
      */
-    void registerNetworkScoreCache(int networkType, INetworkScoreCache scoreCache);
+    void unregisterNetworkScoreCache(int networkType, INetworkScoreCache scoreCache);
 
+    /**
+     * Request a recommendation for the best network to connect to
+     * taking into account the inputs from the {@link RecommendationRequest}.
+     *
+     * @param request a {@link RecommendationRequest} instance containing the details of the request
+     * @return a {@link RecommendationResult} containing the recommended network to connect to
+     * @throws SecurityException if the caller is not the system
+     */
+    RecommendationResult requestRecommendation(in RecommendationRequest request);
+
+    /**
+     * Request scoring for networks.
+     *
+     * Implementations should delegate to the registered network recommendation provider or
+     * fulfill the request locally if possible.
+     *
+     * @param networks an array of {@link NetworkKey}s to score
+     * @return true if the request was delegated or fulfilled locally, false otherwise
+     * @throws SecurityException if the caller is not the system
+     * @hide
+     */
+    boolean requestScores(in NetworkKey[] networks);
+
+    /**
+     * Determine whether the application with the given UID is the enabled scorer.
+     *
+     * @param callingUid the UID to check
+     * @return true if the provided UID is the active scorer, false otherwise.
+     * @hide
+     */
+    boolean isCallerActiveScorer(int callingUid);
+
+    /**
+     * Obtain the package name of the current active network scorer.
+     *
+     * @return the full package name of the current active scorer, or null if there is no active
+     *         scorer.
+     */
+    String getActiveScorerPackage();
+    
+    /**
+     * Request a recommendation for the best network to connect to
+     * taking into account the inputs from the {@link RecommendationRequest}.
+     *
+     * @param request a {@link RecommendationRequest} instance containing the details of the request
+     * @param remoteCallback a {@link RemoteCallback} instance to invoke when the recommendation
+     *                       is available.
+     * @throws SecurityException if the caller is not the system
+     */
+    oneway void requestRecommendationAsync(in RecommendationRequest request,
+                                           in RemoteCallback remoteCallback);
 }

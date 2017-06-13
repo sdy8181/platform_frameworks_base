@@ -17,6 +17,7 @@
 package com.android.systemui.statusbar.phone;
 
 import android.content.Context;
+import android.content.res.Configuration;
 import android.graphics.drawable.AnimatedVectorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.InsetDrawable;
@@ -34,6 +35,8 @@ import com.android.systemui.statusbar.policy.AccessibilityController;
  */
 public class LockIcon extends KeyguardAffordanceView {
 
+    private static final int FP_DRAW_OFF_TIMEOUT = 800;
+
     private static final int STATE_LOCKED = 0;
     private static final int STATE_LOCK_OPEN = 1;
     private static final int STATE_FACE_UNLOCK = 2;
@@ -46,10 +49,13 @@ public class LockIcon extends KeyguardAffordanceView {
     private boolean mDeviceInteractive;
     private boolean mScreenOn;
     private boolean mLastScreenOn;
-    private final TrustDrawable mTrustDrawable;
+    private TrustDrawable mTrustDrawable;
     private final UnlockMethodCache mUnlockMethodCache;
     private AccessibilityController mAccessibilityController;
     private boolean mHasFingerPrintIcon;
+    private int mDensity;
+
+    private final Runnable mDrawOffTimeout = () -> update(true /* forceUpdate */);
 
     public LockIcon(Context context, AttributeSet attrs) {
         super(context, attrs);
@@ -89,7 +95,24 @@ public class LockIcon extends KeyguardAffordanceView {
         update();
     }
 
+    @Override
+    protected void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        final int density = newConfig.densityDpi;
+        if (density != mDensity) {
+            mDensity = density;
+            mTrustDrawable.stop();
+            mTrustDrawable = new TrustDrawable(getContext());
+            setBackground(mTrustDrawable);
+            update();
+        }
+    }
+
     public void update() {
+        update(false /* force */);
+    }
+
+    public void update(boolean force) {
         boolean visible = isShown()
                 && KeyguardUpdateMonitor.getInstance(mContext).isDeviceInteractive();
         if (visible) {
@@ -97,13 +120,12 @@ public class LockIcon extends KeyguardAffordanceView {
         } else {
             mTrustDrawable.stop();
         }
-        // TODO: Real icon for facelock.
         int state = getState();
         boolean anyFingerprintIcon = state == STATE_FINGERPRINT || state == STATE_FINGERPRINT_ERROR;
         boolean useAdditionalPadding = anyFingerprintIcon;
         boolean trustHidden = anyFingerprintIcon;
         if (state != mLastState || mDeviceInteractive != mLastDeviceInteractive
-                || mScreenOn != mLastScreenOn) {
+                || mScreenOn != mLastScreenOn || force) {
             boolean isAnim = true;
             int iconRes = getAnimationResForTransition(mLastState, state, mLastDeviceInteractive,
                     mDeviceInteractive, mLastScreenOn, mScreenOn);
@@ -149,8 +171,17 @@ public class LockIcon extends KeyguardAffordanceView {
             setContentDescription(contentDescription);
             mHasFingerPrintIcon = anyFingerprintIcon;
             if (animation != null && isAnim) {
+                animation.forceAnimationOnUI();
                 animation.start();
             }
+
+            if (iconRes == R.drawable.lockscreen_fingerprint_draw_off_animation) {
+                removeCallbacks(mDrawOffTimeout);
+                postDelayed(mDrawOffTimeout, FP_DRAW_OFF_TIMEOUT);
+            } else {
+                removeCallbacks(mDrawOffTimeout);
+            }
+
             mLastState = state;
             mLastDeviceInteractive = mDeviceInteractive;
             mLastScreenOn = mScreenOn;

@@ -906,14 +906,16 @@ android_media_MediaPlayer_native_finalize(JNIEnv *env, jobject thiz)
     android_media_MediaPlayer_release(env, thiz);
 }
 
-static void android_media_MediaPlayer_set_audio_session_id(JNIEnv *env,  jobject thiz, jint sessionId) {
+static void android_media_MediaPlayer_set_audio_session_id(JNIEnv *env,  jobject thiz,
+        jint sessionId) {
     ALOGV("set_session_id(): %d", sessionId);
     sp<MediaPlayer> mp = getMediaPlayer(env, thiz);
     if (mp == NULL ) {
         jniThrowException(env, "java/lang/IllegalStateException", NULL);
         return;
     }
-    process_media_player_call( env, thiz, mp->setAudioSessionId(sessionId), NULL, NULL );
+    process_media_player_call( env, thiz, mp->setAudioSessionId((audio_session_t) sessionId), NULL,
+            NULL);
 }
 
 static jint android_media_MediaPlayer_get_audio_session_id(JNIEnv *env,  jobject thiz) {
@@ -1088,6 +1090,7 @@ static int register_android_media_MediaPlayer(JNIEnv *env)
     return AndroidRuntime::registerNativeMethods(env,
                 "android/media/MediaPlayer", gMethods, NELEM(gMethods));
 }
+extern int register_android_media_ExifInterface(JNIEnv *env);
 extern int register_android_media_ImageReader(JNIEnv *env);
 extern int register_android_media_ImageWriter(JNIEnv *env);
 extern int register_android_media_Crypto(JNIEnv *env);
@@ -1103,7 +1106,6 @@ extern int register_android_media_MediaScanner(JNIEnv *env);
 extern int register_android_media_MediaSync(JNIEnv *env);
 extern int register_android_media_ResampleInputStream(JNIEnv *env);
 extern int register_android_media_MediaProfiles(JNIEnv *env);
-extern int register_android_media_AmrInputStream(JNIEnv *env);
 extern int register_android_mtp_MtpDatabase(JNIEnv *env);
 extern int register_android_mtp_MtpDevice(JNIEnv *env);
 extern int register_android_mtp_MtpServer(JNIEnv *env);
@@ -1146,11 +1148,6 @@ jint JNI_OnLoad(JavaVM* vm, void* /* reserved */)
 
     if (register_android_media_MediaMetadataRetriever(env) < 0) {
         ALOGE("ERROR: MediaMetadataRetriever native registration failed\n");
-        goto bail;
-    }
-
-    if (register_android_media_AmrInputStream(env) < 0) {
-        ALOGE("ERROR: AmrInputStream native registration failed\n");
         goto bail;
     }
 
@@ -1216,6 +1213,11 @@ jint JNI_OnLoad(JavaVM* vm, void* /* reserved */)
 
     if (register_android_media_MediaHTTPConnection(env) < 0) {
         ALOGE("ERROR: MediaHTTPConnection native registration failed");
+        goto bail;
+    }
+
+    if (register_android_media_ExifInterface(env) < 0) {
+        ALOGE("ERROR: ExifInterface native registration failed");
         goto bail;
     }
 

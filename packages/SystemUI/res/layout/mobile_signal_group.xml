@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-/* apps/common/assets/default/default/skins/StatusBar.xml
 **
 ** Copyright 2011, The Android Open Source Project
 **
@@ -43,5 +42,22 @@
         android:id="@+id/mobile_type"
         android:layout_height="wrap_content"
         android:layout_width="wrap_content"
+        />
+    <ImageView
+        android:id="@+id/mobile_roaming"
+        android:layout_width="wrap_content"
+        android:layout_height="17dp"
+        android:paddingStart="22dp"
+        android:paddingTop="1.5dp"
+        android:paddingBottom="3dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/stat_sys_roaming"
+        android:contentDescription="@string/accessibility_data_connection_roaming"
+        android:visibility="gone" />
+    <ImageView
+        android:id="@+id/mobile_inout"
+        android:layout_height="wrap_content"
+        android:layout_width="wrap_content"
+        android:visibility="gone"
         />
 </FrameLayout>

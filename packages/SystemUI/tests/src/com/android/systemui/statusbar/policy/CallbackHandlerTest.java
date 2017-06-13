@@ -19,12 +19,10 @@ import android.os.HandlerThread;
 import android.telephony.SubscriptionInfo;
 import android.test.AndroidTestCase;
 import android.test.suitebuilder.annotation.SmallTest;
-
 import com.android.systemui.R;
+import com.android.systemui.statusbar.policy.NetworkController.EmergencyListener;
 import com.android.systemui.statusbar.policy.NetworkController.IconState;
 import com.android.systemui.statusbar.policy.NetworkController.SignalCallback;
-import com.android.systemui.statusbar.policy.NetworkControllerImpl.EmergencyListener;
-
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -32,6 +30,8 @@ import org.mockito.MockitoAnnotations;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import static org.mockito.Matchers.eq;
 
 @SmallTest
 public class CallbackHandlerTest extends AndroidTestCase {
@@ -104,8 +104,9 @@ public class CallbackHandlerTest extends AndroidTestCase {
         int qsType = R.drawable.ic_qs_signal_1x;
         boolean wide = true;
         int subId = 5;
+        boolean roaming = true;
         mHandler.setMobileDataIndicators(status, qs, type, qsType, in, out, typeDescription,
-                description, wide, subId);
+                description, wide, subId, roaming);
         waitForCallbacks();
 
         ArgumentCaptor<IconState> statusArg = ArgumentCaptor.forClass(IconState.class);
@@ -121,7 +122,7 @@ public class CallbackHandlerTest extends AndroidTestCase {
         Mockito.verify(mSignalCallback).setMobileDataIndicators(statusArg.capture(),
                 qsArg.capture(), typeIconArg.capture(), qsTypeIconArg.capture(), inArg.capture(),
                 outArg.capture(), typeContentArg.capture(), descArg.capture(), wideArg.capture(),
-                subIdArg.capture());
+                subIdArg.capture(), eq(roaming));
         assertEquals(status, statusArg.getValue());
         assertEquals(qs, qsArg.getValue());
         assertEquals(type, (int) typeIconArg.getValue());

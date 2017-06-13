@@ -40,14 +40,14 @@ public:
  */
 class SoundPoolThread {
 public:
-    SoundPoolThread(SoundPool* SoundPool);
+    explicit SoundPoolThread(SoundPool* SoundPool);
     ~SoundPoolThread();
     void loadSample(int sampleID);
     void quit();
     void write(SoundPoolMsg msg);
 
 private:
-    static const size_t maxMessages = 5;
+    static const size_t maxMessages = 128;
 
     static int beginThread(void* arg);
     int run();

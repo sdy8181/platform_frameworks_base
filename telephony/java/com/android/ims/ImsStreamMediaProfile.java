@@ -51,6 +51,16 @@ public class ImsStreamMediaProfile implements Parcelable {
     public static final int AUDIO_QUALITY_GSM_EFR = 8;
     public static final int AUDIO_QUALITY_GSM_FR = 9;
     public static final int AUDIO_QUALITY_GSM_HR = 10;
+    public static final int AUDIO_QUALITY_G711U = 11;
+    public static final int AUDIO_QUALITY_G723 = 12;
+    public static final int AUDIO_QUALITY_G711A = 13;
+    public static final int AUDIO_QUALITY_G722 = 14;
+    public static final int AUDIO_QUALITY_G711AB = 15;
+    public static final int AUDIO_QUALITY_G729 = 16;
+    public static final int AUDIO_QUALITY_EVS_NB = 17;
+    public static final int AUDIO_QUALITY_EVS_WB = 18;
+    public static final int AUDIO_QUALITY_EVS_SWB = 19;
+    public static final int AUDIO_QUALITY_EVS_FB = 20;
 
    /**
      * Video information
@@ -62,24 +72,31 @@ public class ImsStreamMediaProfile implements Parcelable {
     public static final int VIDEO_QUALITY_VGA_LANDSCAPE = (1 << 3);
     public static final int VIDEO_QUALITY_VGA_PORTRAIT = (1 << 4);
 
+    /**
+     * RTT Modes
+     */
+    public static final int RTT_MODE_DISABLED = 0;
+    public static final int RTT_MODE_FULL = 1;
+
     // Audio related information
     public int mAudioQuality;
     public int mAudioDirection;
     // Video related information
     public int mVideoQuality;
     public int mVideoDirection;
-
-
+    // Rtt related information
+    public int mRttMode;
 
     public ImsStreamMediaProfile(Parcel in) {
         readFromParcel(in);
     }
 
     public ImsStreamMediaProfile() {
-        mAudioQuality = AUDIO_QUALITY_AMR_WB;
+        mAudioQuality = AUDIO_QUALITY_NONE;
         mAudioDirection = DIRECTION_SEND_RECEIVE;
         mVideoQuality = VIDEO_QUALITY_NONE;
         mVideoDirection = DIRECTION_INVALID;
+        mRttMode = RTT_MODE_DISABLED;
     }
 
     public ImsStreamMediaProfile(int audioQuality, int audioDirection,
@@ -90,11 +107,16 @@ public class ImsStreamMediaProfile implements Parcelable {
         mVideoDirection = videoDirection;
     }
 
+    public ImsStreamMediaProfile(int rttMode) {
+        mRttMode = rttMode;
+    }
+
     public void copyFrom(ImsStreamMediaProfile profile) {
         mAudioQuality = profile.mAudioQuality;
         mAudioDirection = profile.mAudioDirection;
         mVideoQuality = profile.mVideoQuality;
         mVideoDirection = profile.mVideoDirection;
+        mRttMode = profile.mRttMode;
     }
 
     @Override
@@ -102,7 +124,8 @@ public class ImsStreamMediaProfile implements Parcelable {
         return "{ audioQuality=" + mAudioQuality +
                 ", audioDirection=" + mAudioDirection +
                 ", videoQuality=" + mVideoQuality +
-                ", videoDirection=" + mVideoDirection + " }";
+                ", videoDirection=" + mVideoDirection +
+                ", rttMode=" + mRttMode + " }";
     }
 
     @Override
@@ -116,6 +139,7 @@ public class ImsStreamMediaProfile implements Parcelable {
         out.writeInt(mAudioDirection);
         out.writeInt(mVideoQuality);
         out.writeInt(mVideoDirection);
+        out.writeInt(mRttMode);
     }
 
     private void readFromParcel(Parcel in) {
@@ -123,6 +147,7 @@ public class ImsStreamMediaProfile implements Parcelable {
         mAudioDirection = in.readInt();
         mVideoQuality = in.readInt();
         mVideoDirection = in.readInt();
+        mRttMode = in.readInt();
     }
 
     public static final Creator<ImsStreamMediaProfile> CREATOR =
@@ -137,4 +162,20 @@ public class ImsStreamMediaProfile implements Parcelable {
             return new ImsStreamMediaProfile[size];
         }
     };
+
+    /**
+     * Determines if it's RTT call
+     * @return true if RTT call, false otherwise.
+     */
+    public boolean isRttCall() {
+        return (mRttMode == RTT_MODE_FULL);
+    }
+
+    /**
+     * Updates the RttCall attribute
+     */
+    public void setRttMode(int rttMode) {
+        mRttMode = rttMode;
+    }
+
 }

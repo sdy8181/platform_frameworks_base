@@ -17,25 +17,17 @@
 #define LOG_TAG "MtpDatabaseJNI"
 #include "utils/Log.h"
 
-#include <assert.h>
-#include <fcntl.h>
-#include <inttypes.h>
-#include <limits.h>
-#include <stdio.h>
-#include <unistd.h>
-
-#include "jni.h"
-#include "JNIHelp.h"
-#include "android_runtime/AndroidRuntime.h"
-#include "android_runtime/Log.h"
-
+#include "android_media_Utils.h"
+#include "mtp.h"
 #include "MtpDatabase.h"
 #include "MtpDataPacket.h"
 #include "MtpObjectInfo.h"
 #include "MtpProperty.h"
 #include "MtpStringBuffer.h"
 #include "MtpUtils.h"
-#include "mtp.h"
+
+#include "src/piex_types.h"
+#include "src/piex.h"
 
 extern "C" {
 #include "libexif/exif-content.h"
@@ -43,6 +35,19 @@ extern "C" {
 #include "libexif/exif-tag.h"
 #include "libexif/exif-utils.h"
 }
+
+#include <android_runtime/AndroidRuntime.h>
+#include <android_runtime/Log.h>
+#include <jni.h>
+#include <JNIHelp.h>
+#include <nativehelper/ScopedLocalRef.h>
+
+#include <assert.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <stdio.h>
+#include <unistd.h>
 
 using namespace android;
 
@@ -71,6 +76,7 @@ static jmethodID method_sessionEnded;
 static jfieldID field_context;
 static jfieldID field_batteryLevel;
 static jfieldID field_batteryScale;
+static jfieldID field_deviceType;
 
 // MtpPropertyList fields
 static jfieldID field_mCount;
@@ -226,11 +232,11 @@ MyMtpDatabase::~MyMtpDatabase() {
 }
 
 MtpObjectHandle MyMtpDatabase::beginSendObject(const char* path,
-                                            MtpObjectFormat format,
-                                            MtpObjectHandle parent,
-                                            MtpStorageID storage,
-                                            uint64_t size,
-                                            time_t modified) {
+                                               MtpObjectFormat format,
+                                               MtpObjectHandle parent,
+                                               MtpStorageID storage,
+                                               uint64_t size,
+                                               time_t modified) {
     JNIEnv* env = AndroidRuntime::getJNIEnv();
     jstring pathStr = env->NewStringUTF(path);
     MtpObjectHandle result = env->CallIntMethod(mDatabase, method_beginSendObject,
@@ -244,7 +250,7 @@ MtpObjectHandle MyMtpDatabase::beginSendObject(const char* path,
 }
 
 void MyMtpDatabase::endSendObject(const char* path, MtpObjectHandle handle,
-                                MtpObjectFormat format, bool succeeded) {
+                                  MtpObjectFormat format, bool succeeded) {
     JNIEnv* env = AndroidRuntime::getJNIEnv();
     jstring pathStr = env->NewStringUTF(path);
     env->CallVoidMethod(mDatabase, method_endSendObject, pathStr,
@@ -256,8 +262,8 @@ void MyMtpDatabase::endSendObject(const char* path, MtpObjectHandle handle,
 }
 
 MtpObjectHandleList* MyMtpDatabase::getObjectList(MtpStorageID storageID,
-                                    MtpObjectFormat format,
-                                    MtpObjectHandle parent) {
+                                                  MtpObjectFormat format,
+                                                  MtpObjectHandle parent) {
     JNIEnv* env = AndroidRuntime::getJNIEnv();
     jintArray array = (jintArray)env->CallObjectMethod(mDatabase, method_getObjectList,
                 (jint)storageID, (jint)format, (jint)parent);
@@ -276,8 +282,8 @@ MtpObjectHandleList* MyMtpDatabase::getObjectList(MtpStorageID storageID,
 }
 
 int MyMtpDatabase::getNumObjects(MtpStorageID storageID,
-                                MtpObjectFormat format,
-                                MtpObjectHandle parent) {
+                                 MtpObjectFormat format,
+                                 MtpObjectHandle parent) {
     JNIEnv* env = AndroidRuntime::getJNIEnv();
     int result = env->CallIntMethod(mDatabase, method_getNumObjects,
                 (jint)storageID, (jint)format, (jint)parent);
@@ -359,11 +365,21 @@ MtpDevicePropertyList* MyMtpDatabase::getSupportedDeviceProperties() {
 }
 
 MtpResponseCode MyMtpDatabase::getObjectPropertyValue(MtpObjectHandle handle,
-                                            MtpObjectProperty property,
-                                            MtpDataPacket& packet) {
+                                                      MtpObjectProperty property,
+                                                      MtpDataPacket& packet) {
+    static_assert(sizeof(jint) >= sizeof(MtpObjectHandle),
+                  "Casting MtpObjectHandle to jint loses a value");
+    static_assert(sizeof(jint) >= sizeof(MtpObjectProperty),
+                  "Casting MtpObjectProperty to jint loses a value");
     JNIEnv* env = AndroidRuntime::getJNIEnv();
-    jobject list = env->CallObjectMethod(mDatabase, method_getObjectPropertyList,
-                (jlong)handle, 0, (jlong)property, 0, 0);
+    jobject list = env->CallObjectMethod(
+            mDatabase,
+            method_getObjectPropertyList,
+            static_cast<jint>(handle),
+            0,
+            static_cast<jint>(property),
+            0,
+            0);
     MtpResponseCode result = env->GetIntField(list, field_mResult);
     int count = env->GetIntField(list, field_mCount);
     if (result == MTP_RESPONSE_OK && count != 1)
@@ -527,8 +543,8 @@ static bool readLongValue(int type, MtpDataPacket& packet, jlong& longValue) {
 }
 
 MtpResponseCode MyMtpDatabase::setObjectPropertyValue(MtpObjectHandle handle,
-                                            MtpObjectProperty property,
-                                            MtpDataPacket& packet) {
+                                                      MtpObjectProperty property,
+                                                      MtpDataPacket& packet) {
     int         type;
 
     if (!getObjectPropertyInfo(property, type))
@@ -558,7 +574,7 @@ fail:
 }
 
 MtpResponseCode MyMtpDatabase::getDevicePropertyValue(MtpDeviceProperty property,
-                                            MtpDataPacket& packet) {
+                                                      MtpDataPacket& packet) {
     JNIEnv* env = AndroidRuntime::getJNIEnv();
 
     if (property == MTP_DEVICE_PROPERTY_BATTERY_LEVEL) {
@@ -631,7 +647,7 @@ MtpResponseCode MyMtpDatabase::getDevicePropertyValue(MtpDeviceProperty property
 }
 
 MtpResponseCode MyMtpDatabase::setDevicePropertyValue(MtpDeviceProperty property,
-                                            MtpDataPacket& packet) {
+                                                      MtpDataPacket& packet) {
     int         type;
 
     if (!getDevicePropertyInfo(property, type))
@@ -665,12 +681,20 @@ MtpResponseCode MyMtpDatabase::resetDeviceProperty(MtpDeviceProperty /*property*
 }
 
 MtpResponseCode MyMtpDatabase::getObjectPropertyList(MtpObjectHandle handle,
-                                            uint32_t format, uint32_t property,
-                                            int groupCode, int depth,
-                                            MtpDataPacket& packet) {
+                                                     uint32_t format, uint32_t property,
+                                                     int groupCode, int depth,
+                                                     MtpDataPacket& packet) {
+    static_assert(sizeof(jint) >= sizeof(MtpObjectHandle),
+                  "Casting MtpObjectHandle to jint loses a value");
     JNIEnv* env = AndroidRuntime::getJNIEnv();
-    jobject list = env->CallObjectMethod(mDatabase, method_getObjectPropertyList,
-                (jlong)handle, (jint)format, (jlong)property, (jint)groupCode, (jint)depth);
+    jobject list = env->CallObjectMethod(
+            mDatabase,
+            method_getObjectPropertyList,
+            static_cast<jint>(handle),
+            static_cast<jint>(format),
+            static_cast<jint>(property),
+            static_cast<jint>(groupCode),
+            static_cast<jint>(depth));
     checkAndClearExceptionFromCallback(env, __FUNCTION__);
     if (!list)
         return MTP_RESPONSE_GENERAL_ERROR;
@@ -782,7 +806,7 @@ static long getLongFromExifEntry(ExifEntry *e) {
 }
 
 MtpResponseCode MyMtpDatabase::getObjectInfo(MtpObjectHandle handle,
-                                            MtpObjectInfo& info) {
+                                             MtpObjectInfo& info) {
     MtpString       path;
     int64_t         length;
     MtpObjectFormat format;
@@ -823,24 +847,48 @@ MtpResponseCode MyMtpDatabase::getObjectInfo(MtpObjectHandle handle,
     env->ReleaseCharArrayElements(mStringBuffer, str, 0);
 
     // read EXIF data for thumbnail information
-    if (info.mFormat == MTP_FORMAT_EXIF_JPEG || info.mFormat == MTP_FORMAT_JFIF) {
+    switch (info.mFormat) {
+        case MTP_FORMAT_EXIF_JPEG:
+        case MTP_FORMAT_JFIF: {
+            ExifData *exifdata = exif_data_new_from_file(path);
+            if (exifdata) {
+                if ((false)) {
+                    exif_data_foreach_content(exifdata, foreachcontent, NULL);
+                }
 
-        ExifData *exifdata = exif_data_new_from_file(path);
-        if (exifdata) {
-            if ((false)) {
-                exif_data_foreach_content(exifdata, foreachcontent, NULL);
+                ExifEntry *w = exif_content_get_entry(
+                        exifdata->ifd[EXIF_IFD_EXIF], EXIF_TAG_PIXEL_X_DIMENSION);
+                ExifEntry *h = exif_content_get_entry(
+                        exifdata->ifd[EXIF_IFD_EXIF], EXIF_TAG_PIXEL_Y_DIMENSION);
+                info.mThumbCompressedSize = exifdata->data ? exifdata->size : 0;
+                info.mThumbFormat = MTP_FORMAT_EXIF_JPEG;
+                info.mImagePixWidth = w ? getLongFromExifEntry(w) : 0;
+                info.mImagePixHeight = h ? getLongFromExifEntry(h) : 0;
+                exif_data_unref(exifdata);
+            }
+            break;
+        }
+
+        // Except DNG, all supported RAW image formats are not defined in PTP 1.2 specification.
+        // Most of RAW image formats are based on TIFF or TIFF/EP. To render Fuji's RAF format,
+        // it checks MTP_FORMAT_DEFINED case since it's designed as a custom format.
+        case MTP_FORMAT_DNG:
+        case MTP_FORMAT_TIFF:
+        case MTP_FORMAT_TIFF_EP:
+        case MTP_FORMAT_DEFINED: {
+            std::unique_ptr<FileStream> stream(new FileStream(path));
+            piex::PreviewImageData image_data;
+            if (!GetExifFromRawImage(stream.get(), path, image_data)) {
+                // Couldn't parse EXIF data from a image file via piex.
+                break;
             }
 
-            // XXX get this from exif, or parse jpeg header instead?
-            ExifEntry *w = exif_content_get_entry(
-                    exifdata->ifd[EXIF_IFD_EXIF], EXIF_TAG_PIXEL_X_DIMENSION);
-            ExifEntry *h = exif_content_get_entry(
-                    exifdata->ifd[EXIF_IFD_EXIF], EXIF_TAG_PIXEL_Y_DIMENSION);
-            info.mThumbCompressedSize = exifdata->data ? exifdata->size : 0;
+            info.mThumbCompressedSize = image_data.thumbnail.length;
             info.mThumbFormat = MTP_FORMAT_EXIF_JPEG;
-            info.mImagePixWidth = w ? getLongFromExifEntry(w) : 0;
-            info.mImagePixHeight = h ? getLongFromExifEntry(h) : 0;
-            exif_data_unref(exifdata);
+            info.mImagePixWidth = image_data.full_width;
+            info.mImagePixHeight = image_data.full_height;
+
+            break;
         }
     }
 
@@ -855,19 +903,56 @@ void* MyMtpDatabase::getThumbnail(MtpObjectHandle handle, size_t& outThumbSize) 
     void* result = NULL;
     outThumbSize = 0;
 
-    if (getObjectFilePath(handle, path, length, format) == MTP_RESPONSE_OK
-            && (format == MTP_FORMAT_EXIF_JPEG || format == MTP_FORMAT_JFIF)) {
-
-        ExifData *exifdata = exif_data_new_from_file(path);
-        if (exifdata) {
-            if (exifdata->data) {
-                result = malloc(exifdata->size);
-                if (result) {
-                    memcpy(result, exifdata->data, exifdata->size);
-                    outThumbSize = exifdata->size;
+    if (getObjectFilePath(handle, path, length, format) == MTP_RESPONSE_OK) {
+        switch (format) {
+            case MTP_FORMAT_EXIF_JPEG:
+            case MTP_FORMAT_JFIF: {
+                ExifData *exifdata = exif_data_new_from_file(path);
+                if (exifdata) {
+                    if (exifdata->data) {
+                        result = malloc(exifdata->size);
+                        if (result) {
+                            memcpy(result, exifdata->data, exifdata->size);
+                            outThumbSize = exifdata->size;
+                        }
+                    }
+                    exif_data_unref(exifdata);
                 }
+                break;
             }
-            exif_data_unref(exifdata);
+
+            // See the above comment on getObjectInfo() method.
+            case MTP_FORMAT_DNG:
+            case MTP_FORMAT_TIFF:
+            case MTP_FORMAT_TIFF_EP:
+            case MTP_FORMAT_DEFINED: {
+                std::unique_ptr<FileStream> stream(new FileStream(path));
+                piex::PreviewImageData image_data;
+                if (!GetExifFromRawImage(stream.get(), path, image_data)) {
+                    // Couldn't parse EXIF data from a image file via piex.
+                    break;
+                }
+
+                if (image_data.thumbnail.length == 0
+                        || image_data.thumbnail.format != ::piex::Image::kJpegCompressed) {
+                    // No thumbnail or non jpeg thumbnail.
+                    break;
+                }
+
+                result = malloc(image_data.thumbnail.length);
+                if (result) {
+                    piex::Error err = stream.get()->GetData(
+                            image_data.thumbnail.offset,
+                            image_data.thumbnail.length,
+                            (std::uint8_t *)result);
+                    if (err == piex::Error::kOk) {
+                        outThumbSize = image_data.thumbnail.length;
+                    } else {
+                        free(result);
+                    }
+                }
+                break;
+            }
         }
     }
 
@@ -875,9 +960,9 @@ void* MyMtpDatabase::getThumbnail(MtpObjectHandle handle, size_t& outThumbSize) 
 }
 
 MtpResponseCode MyMtpDatabase::getObjectFilePath(MtpObjectHandle handle,
-                                            MtpString& outFilePath,
-                                            int64_t& outFileLength,
-                                            MtpObjectFormat& outFormat) {
+                                                 MtpString& outFilePath,
+                                                 int64_t& outFileLength,
+                                                 MtpObjectFormat& outFormat) {
     JNIEnv* env = AndroidRuntime::getJNIEnv();
     jint result = env->CallIntMethod(mDatabase, method_getObjectFilePath,
                 (jint)handle, mStringBuffer, mLongBuffer);
@@ -946,6 +1031,7 @@ static const PropertyTableEntry   kDevicePropertyTable[] = {
     {   MTP_DEVICE_PROPERTY_DEVICE_FRIENDLY_NAME,       MTP_TYPE_STR },
     {   MTP_DEVICE_PROPERTY_IMAGE_SIZE,                 MTP_TYPE_STR },
     {   MTP_DEVICE_PROPERTY_BATTERY_LEVEL,              MTP_TYPE_UINT8 },
+    {   MTP_DEVICE_PROPERTY_PERCEIVED_DEVICE_TYPE,      MTP_TYPE_UINT32 },
 };
 
 bool MyMtpDatabase::getObjectPropertyInfo(MtpObjectProperty property, int& type) {
@@ -991,7 +1077,7 @@ MtpObjectHandleList* MyMtpDatabase::getObjectReferences(MtpObjectHandle handle) 
 }
 
 MtpResponseCode MyMtpDatabase::setObjectReferences(MtpObjectHandle handle,
-                                                    MtpObjectHandleList* references) {
+                                                   MtpObjectHandleList* references) {
     JNIEnv* env = AndroidRuntime::getJNIEnv();
     int count = references->size();
     jintArray array = env->NewIntArray(count);
@@ -1012,7 +1098,7 @@ MtpResponseCode MyMtpDatabase::setObjectReferences(MtpObjectHandle handle,
 }
 
 MtpProperty* MyMtpDatabase::getObjectPropertyDesc(MtpObjectProperty property,
-                                            MtpObjectFormat format) {
+                                                  MtpObjectFormat format) {
     static const int channelEnum[] = {
                                         1,  // mono
                                         2,  // stereo
@@ -1124,6 +1210,10 @@ MtpProperty* MyMtpDatabase::getDevicePropertyDesc(MtpDeviceProperty property) {
             result = new MtpProperty(property, MTP_TYPE_UINT8);
             result->setFormRange(0, env->GetIntField(mDatabase, field_batteryScale), 1);
             result->mCurrentValue.u.u8 = (uint8_t)env->GetIntField(mDatabase, field_batteryLevel);
+            break;
+        case MTP_DEVICE_PROPERTY_PERCEIVED_DEVICE_TYPE:
+            result = new MtpProperty(property, MTP_TYPE_UINT32);
+            result->mCurrentValue.u.u32 = (uint32_t)env->GetIntField(mDatabase, field_deviceType);
             break;
     }
 
@@ -1248,7 +1338,7 @@ int register_android_mtp_MtpDatabase(JNIEnv *env)
         return -1;
     }
     method_getObjectPropertyList = env->GetMethodID(clazz, "getObjectPropertyList",
-            "(JIJII)Landroid/mtp/MtpPropertyList;");
+            "(IIIII)Landroid/mtp/MtpPropertyList;");
     if (method_getObjectPropertyList == NULL) {
         ALOGE("Can't find getObjectPropertyList");
         return -1;
@@ -1302,6 +1392,11 @@ int register_android_mtp_MtpDatabase(JNIEnv *env)
     field_batteryScale = env->GetFieldID(clazz, "mBatteryScale", "I");
     if (field_batteryScale == NULL) {
         ALOGE("Can't find MtpDatabase.mBatteryScale");
+        return -1;
+    }
+    field_deviceType = env->GetFieldID(clazz, "mDeviceType", "I");
+    if (field_deviceType == NULL) {
+        ALOGE("Can't find MtpDatabase.mDeviceType");
         return -1;
     }
 

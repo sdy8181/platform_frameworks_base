@@ -21,14 +21,19 @@ import android.annotation.RequiresPermission;
 import android.app.trust.ITrustManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.os.Binder;
-import android.os.RemoteException;
 import android.os.IBinder;
+import android.os.IUserManager;
+import android.os.RemoteException;
 import android.os.ServiceManager;
 import android.os.UserHandle;
-import android.view.IWindowManager;
 import android.view.IOnKeyguardExitResult;
+import android.view.IWindowManager;
 import android.view.WindowManagerGlobal;
+
+import java.util.List;
 
 /**
  * Class that can be used to lock and unlock the keyboard. Get an instance of this
@@ -40,6 +45,8 @@ import android.view.WindowManagerGlobal;
 public class KeyguardManager {
     private IWindowManager mWM;
     private ITrustManager mTrustManager;
+    private IUserManager mUserManager;
+    private Context mContext;
 
     /**
      * Intent used to prompt user for device credentials.
@@ -47,6 +54,13 @@ public class KeyguardManager {
      */
     public static final String ACTION_CONFIRM_DEVICE_CREDENTIAL =
             "android.app.action.CONFIRM_DEVICE_CREDENTIAL";
+
+    /**
+     * Intent used to prompt user for device credentials.
+     * @hide
+     */
+    public static final String ACTION_CONFIRM_DEVICE_CREDENTIAL_WITH_USER =
+            "android.app.action.CONFIRM_DEVICE_CREDENTIAL_WITH_USER";
 
     /**
      * A CharSequence dialog title to show to the user when used with a
@@ -71,13 +85,48 @@ public class KeyguardManager {
      * @return the intent for launching the activity or null if no password is required.
      **/
     public Intent createConfirmDeviceCredentialIntent(CharSequence title, CharSequence description) {
-        if (!isKeyguardSecure()) return null;
+        if (!isDeviceSecure()) return null;
         Intent intent = new Intent(ACTION_CONFIRM_DEVICE_CREDENTIAL);
         intent.putExtra(EXTRA_TITLE, title);
         intent.putExtra(EXTRA_DESCRIPTION, description);
-        // For security reasons, only allow this to come from system settings.
-        intent.setPackage("com.android.settings");
+
+        // explicitly set the package for security
+        intent.setPackage(getSettingsPackageForIntent(intent));
         return intent;
+    }
+
+    /**
+     * Get an intent to prompt the user to confirm credentials (pin, pattern or password)
+     * for the given user. The caller is expected to launch this activity using
+     * {@link android.app.Activity#startActivityForResult(Intent, int)} and check for
+     * {@link android.app.Activity#RESULT_OK} if the user successfully completes the challenge.
+     *
+     * @return the intent for launching the activity or null if no password is required.
+     *
+     * @hide
+     */
+    public Intent createConfirmDeviceCredentialIntent(
+            CharSequence title, CharSequence description, int userId) {
+        if (!isDeviceSecure(userId)) return null;
+        Intent intent = new Intent(ACTION_CONFIRM_DEVICE_CREDENTIAL_WITH_USER);
+        intent.putExtra(EXTRA_TITLE, title);
+        intent.putExtra(EXTRA_DESCRIPTION, description);
+        intent.putExtra(Intent.EXTRA_USER_ID, userId);
+
+        // explicitly set the package for security
+        intent.setPackage(getSettingsPackageForIntent(intent));
+
+        return intent;
+    }
+
+    private String getSettingsPackageForIntent(Intent intent) {
+        List<ResolveInfo> resolveInfos = mContext.getPackageManager()
+                .queryIntentActivities(intent, PackageManager.MATCH_SYSTEM_ONLY);
+        for (int i = 0; i < resolveInfos.size(); i++) {
+            return resolveInfos.get(i).activityInfo.packageName;
+        }
+
+        return "com.android.settings";
     }
 
     /**
@@ -158,10 +207,13 @@ public class KeyguardManager {
     }
 
 
-    KeyguardManager() {
+    KeyguardManager(Context context) {
+        mContext = context;
         mWM = WindowManagerGlobal.getWindowManagerService();
         mTrustManager = ITrustManager.Stub.asInterface(
                 ServiceManager.getService(Context.TRUST_SERVICE));
+        mUserManager = IUserManager.Stub.asInterface(
+                ServiceManager.getService(Context.USER_SERVICE));
     }
 
     /**
@@ -248,8 +300,9 @@ public class KeyguardManager {
      * @hide
      */
     public boolean isDeviceLocked(int userId) {
+        ITrustManager trustManager = getTrustManager();
         try {
-            return mTrustManager.isDeviceLocked(userId);
+            return trustManager.isDeviceLocked(userId);
         } catch (RemoteException e) {
             return false;
         }
@@ -273,11 +326,20 @@ public class KeyguardManager {
      * @hide
      */
     public boolean isDeviceSecure(int userId) {
+        ITrustManager trustManager = getTrustManager();
         try {
-            return mTrustManager.isDeviceSecure(userId);
+            return trustManager.isDeviceSecure(userId);
         } catch (RemoteException e) {
             return false;
         }
+    }
+
+    private synchronized ITrustManager getTrustManager() {
+        if (mTrustManager == null) {
+            mTrustManager = ITrustManager.Stub.asInterface(
+                    ServiceManager.getService(Context.TRUST_SERVICE));
+        }
+        return mTrustManager;
     }
 
     /**

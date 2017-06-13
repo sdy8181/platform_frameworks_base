@@ -16,9 +16,12 @@
 
 package android.telecom;
 
+import android.os.Bundle;
 import android.os.RemoteException;
 
 import com.android.internal.telecom.IInCallAdapter;
+
+import java.util.List;
 
 /**
  * Receives commands from {@link InCallService} implementations which should be executed by
@@ -31,7 +34,7 @@ import com.android.internal.telecom.IInCallAdapter;
  * <p>
  * The adapter will stop functioning when there are no more calls.
  *
- * {@hide}
+ * @hide
  */
 public final class InCallAdapter {
     private final IInCallAdapter mAdapter;
@@ -251,6 +254,105 @@ public final class InCallAdapter {
     }
 
     /**
+     * Instructs Telecom to pull an external call to the local device.
+     *
+     * @param callId The callId to pull.
+     */
+    public void pullExternalCall(String callId) {
+        try {
+            mAdapter.pullExternalCall(callId);
+        } catch (RemoteException ignored) {
+        }
+    }
+
+    /**
+     * Intructs Telecom to send a call event.
+     *
+     * @param callId The callId to send the event for.
+     * @param event The event.
+     * @param extras Extras associated with the event.
+     */
+    public void sendCallEvent(String callId, String event, Bundle extras) {
+        try {
+            mAdapter.sendCallEvent(callId, event, extras);
+        } catch (RemoteException ignored) {
+        }
+    }
+
+    /**
+     * Intructs Telecom to add extras to a call.
+     *
+     * @param callId The callId to add the extras to.
+     * @param extras The extras.
+     */
+    public void putExtras(String callId, Bundle extras) {
+        try {
+            mAdapter.putExtras(callId, extras);
+        } catch (RemoteException ignored) {
+        }
+    }
+
+    /**
+     * Intructs Telecom to add an extra to a call.
+     *
+     * @param callId The callId to add the extras to.
+     * @param key The extra key.
+     * @param value The extra value.
+     */
+    public void putExtra(String callId, String key, boolean value) {
+        try {
+            Bundle bundle = new Bundle();
+            bundle.putBoolean(key, value);
+            mAdapter.putExtras(callId, bundle);
+        } catch (RemoteException ignored) {
+        }
+    }
+
+    /**
+     * Intructs Telecom to add an extra to a call.
+     *
+     * @param callId The callId to add the extras to.
+     * @param key The extra key.
+     * @param value The extra value.
+     */
+    public void putExtra(String callId, String key, int value) {
+        try {
+            Bundle bundle = new Bundle();
+            bundle.putInt(key, value);
+            mAdapter.putExtras(callId, bundle);
+        } catch (RemoteException ignored) {
+        }
+    }
+
+    /**
+     * Intructs Telecom to add an extra to a call.
+     *
+     * @param callId The callId to add the extras to.
+     * @param key The extra key.
+     * @param value The extra value.
+     */
+    public void putExtra(String callId, String key, String value) {
+        try {
+            Bundle bundle = new Bundle();
+            bundle.putString(key, value);
+            mAdapter.putExtras(callId, bundle);
+        } catch (RemoteException ignored) {
+        }
+    }
+
+    /**
+     * Intructs Telecom to remove extras from a call.
+     * @param callId The callId to remove the extras from.
+     * @param keys The extra keys to remove.
+     */
+    public void removeExtras(String callId, List<String> keys) {
+        try {
+            mAdapter.removeExtras(callId, keys);
+        } catch (RemoteException ignored) {
+        }
+    }
+
+    /**
      * Instructs Telecom to turn the proximity sensor on.
      */
     public void turnProximitySensorOn() {
@@ -270,6 +372,50 @@ public final class InCallAdapter {
     public void turnProximitySensorOff(boolean screenOnImmediately) {
         try {
             mAdapter.turnOffProximitySensor(screenOnImmediately);
+        } catch (RemoteException ignored) {
+        }
+    }
+
+    /**
+     * Sends an RTT upgrade request to the remote end of the connection.
+     */
+    public void sendRttRequest(String callId) {
+        try {
+            mAdapter.sendRttRequest(callId);
+        } catch (RemoteException ignored) {
+        }
+    }
+
+    /**
+     * Responds to an RTT upgrade request initiated from the remote end.
+     *
+     * @param id the ID of the request as specified by Telecom
+     * @param accept Whether the request should be accepted.
+     */
+    public void respondToRttRequest(String callId, int id, boolean accept) {
+        try {
+            mAdapter.respondToRttRequest(callId, id, accept);
+        } catch (RemoteException ignored) {
+        }
+    }
+
+    /**
+     * Instructs Telecom to shut down the RTT communication channel.
+     */
+    public void stopRtt(String callId) {
+        try {
+            mAdapter.stopRtt(callId);
+        } catch (RemoteException ignored) {
+        }
+    }
+
+    /**
+     * Sets the RTT audio mode.
+     * @param mode the desired RTT audio mode
+     */
+    public void setRttMode(String callId, int mode) {
+        try {
+            mAdapter.setRttMode(callId, mode);
         } catch (RemoteException ignored) {
         }
     }

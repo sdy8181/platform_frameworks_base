@@ -17,13 +17,17 @@
 package android.os;
 
 import android.annotation.IntegerRes;
+import android.annotation.Nullable;
 import android.text.TextUtils;
 import android.util.ArrayMap;
+import android.util.ArraySet;
 import android.util.Log;
 import android.util.Size;
 import android.util.SizeF;
 import android.util.SparseArray;
 import android.util.SparseBooleanArray;
+
+import libcore.util.SneakyThrow;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -34,6 +38,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.ObjectStreamClass;
 import java.io.Serializable;
+import java.lang.reflect.Array;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
@@ -246,6 +251,7 @@ public final class Parcel {
     private static final int EX_NETWORK_MAIN_THREAD = -6;
     private static final int EX_UNSUPPORTED_OPERATION = -7;
     private static final int EX_SERVICE_SPECIFIC = -8;
+    private static final int EX_PARCELABLE = -9;
     private static final int EX_HAS_REPLY_HEADER = -128;  // special; see below
     // EX_TRANSACTION_FAILED is used exclusively in native code.
     // see libbinder's binder/Status.h
@@ -731,6 +737,21 @@ public final class Parcel {
      */
     public void writeArrayMap(ArrayMap<String, Object> val) {
         writeArrayMapInternal(val);
+    }
+
+    /**
+     * Write an array set to the parcel.
+     *
+     * @param val The array set to write.
+     *
+     * @hide
+     */
+    public void writeArraySet(@Nullable ArraySet<? extends Object> val) {
+        final int size = (val != null) ? val.size() : -1;
+        writeInt(size);
+        for (int i = 0; i < size; i++) {
+            writeValue(val.valueAt(i));
+        }
     }
 
     /**
@@ -1537,7 +1558,12 @@ public final class Parcel {
      */
     public final void writeException(Exception e) {
         int code = 0;
-        if (e instanceof SecurityException) {
+        if (e instanceof Parcelable
+                && (e.getClass().getClassLoader() == Parcelable.class.getClassLoader())) {
+            // We only send Parcelable exceptions that are in the
+            // BootClassLoader to ensure that the receiver can unpack them
+            code = EX_PARCELABLE;
+        } else if (e instanceof SecurityException) {
             code = EX_SECURITY;
         } else if (e instanceof BadParcelableException) {
             code = EX_BAD_PARCELABLE;
@@ -1563,8 +1589,20 @@ public final class Parcel {
             throw new RuntimeException(e);
         }
         writeString(e.getMessage());
-        if (e instanceof ServiceSpecificException) {
-            writeInt(((ServiceSpecificException)e).errorCode);
+        switch (code) {
+            case EX_SERVICE_SPECIFIC:
+                writeInt(((ServiceSpecificException) e).errorCode);
+                break;
+            case EX_PARCELABLE:
+                // Write parceled exception prefixed by length
+                final int sizePosition = dataPosition();
+                writeInt(0);
+                writeParcelable((Parcelable) e, Parcelable.PARCELABLE_WRITE_RETURN_VALUE);
+                final int payloadPosition = dataPosition();
+                setDataPosition(sizePosition);
+                writeInt(payloadPosition - sizePosition);
+                setDataPosition(payloadPosition);
+                break;
         }
     }
 
@@ -1662,6 +1700,13 @@ public final class Parcel {
      */
     public final void readException(int code, String msg) {
         switch (code) {
+            case EX_PARCELABLE:
+                if (readInt() > 0) {
+                    SneakyThrow.sneakyThrow(
+                            (Exception) readParcelable(Parcelable.class.getClassLoader()));
+                } else {
+                    throw new RuntimeException(msg + " [missing Parcelable]");
+                }
             case EX_SECURITY:
                 throw new SecurityException(msg);
             case EX_BAD_PARCELABLE:
@@ -2554,6 +2599,20 @@ public final class Parcel {
         return p;
     }
 
+    /** @hide */
+    public final <T extends Parcelable> T[] readParcelableArray(ClassLoader loader,
+            Class<T> clazz) {
+        int N = readInt();
+        if (N < 0) {
+            return null;
+        }
+        T[] p = (T[]) Array.newInstance(clazz, N);
+        for (int i = 0; i < N; i++) {
+            p[i] = readParcelable(loader);
+        }
+        return p;
+    }
+
     /**
      * Read and return a new Serializable object from the parcel.
      * @return the Serializable object, or null if the Serializable name
@@ -2733,6 +2792,26 @@ public final class Parcel {
             return;
         }
         readArrayMapInternal(outVal, N, loader);
+    }
+
+    /**
+     * Reads an array set.
+     *
+     * @param loader The class loader to use.
+     *
+     * @hide
+     */
+    public @Nullable ArraySet<? extends Object> readArraySet(ClassLoader loader) {
+        final int size = readInt();
+        if (size < 0) {
+            return null;
+        }
+        ArraySet<Object> result = new ArraySet<>(size);
+        for (int i = 0; i < size; i++) {
+            Object value = readValue(loader);
+            result.append(value);
+        }
+        return result;
     }
 
     private void readListInternal(List outVal, int N,
